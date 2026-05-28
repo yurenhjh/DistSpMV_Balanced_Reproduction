@@ -1,0 +1,929 @@
+                                                                                                                                                                                             2023 IEEE/ACM 23rd International Symposium on Cluster, Cloud and Internet Computing (CCGrid)
+
+
+
+
+                                                                                                                                                                                      Balancing Computation and Communication in
+                                                                                                                                                                                      Distributed Sparse Matrix-Vector Multiplication
+2023 IEEE/ACM 23rd International Symposium on Cluster, Cloud and Internet Computing (CCGrid) | 979-8-3503-0119-9/23/$31.00 ©2023 IEEE | DOI: 10.1109/CCGRID57682.2023.00056
+
+
+
+
+                                                                                                                                                                                                         Hongli Mi, Xiangrui Yu, Xiaosong Yu, Shuangyuan Wu and Weifeng Liu
+                                                                                                                                                                                                    Super Scientific Software Laboratory, China University of Petroleum-Beijing, China
+                                                                                                                                                                                           {2020011713, 2019011724}@student.cup.edu.cn, 17326808842@163.com,{wsy, weifeng.liu}@cup.edu.cn
+
+
+                                                                                                                                                                                   Abstract—Sparse Matrix-Vector Multiplication (SpMV) is a                   As can be analyzed, the performance of distributed SpMV
+                                                                                                                                                                                fundamental operation in a number of scientific and engineer-              is generally limited by the overheads of communications and
+                                                                                                                                                                                ing problems. When the sparse matrices processed are large                 local SpMV computations. Furthermore, since the distribution
+                                                                                                                                                                                enough, distributed memory systems should be used to accelerate
+                                                                                                                                                                                SpMV. At present, the optimization techniques for distributed              of the nonzeros of sparse matrices can be very irregular, the
+                                                                                                                                                                                SpMV mainly focus on reordering through graph or hypergraph                communication pattern will easily bring a large amount of
+                                                                                                                                                                                partitioning. However, although the reordering could reduce                communications between nodes, and lead to poor scalability.
+                                                                                                                                                                                the amount of communications in general, there are still load              To address the performance challenges, researchers proposed
+                                                                                                                                                                                balancing challenges in computations and communications on                 a number of techniques to optimize distributed SpMV, includ-
+                                                                                                                                                                                distributed platforms that are not well addressed.
+                                                                                                                                                                                   In this paper, we propose two strategies to optimize SpMV               ing various matrix partitioning algorithms [14]–[17], tuning
+                                                                                                                                                                                on distributed clusters: (1) resizing the number of row blocks             schemes for distributed characteristics [18], and computation
+                                                                                                                                                                                on the nodes for balancing the amount of computations, and (2)             and communication overlap [19], [20].
+                                                                                                                                                                                adjusting the column number of the diagonal blocks for balancing              However, despite the above efforts, it is worth noting that
+                                                                                                                                                                                tasks and reducing communications among compute nodes.                     distributed SpMV still faces challenges on load imbalance, and
+                                                                                                                                                                                The experimental results show that compared with the classic
+                                                                                                                                                                                distributed SpMV implementation and its variant reordered with             the problem can not be resolved merely through row/column
+                                                                                                                                                                                graph partitioning, our algorithm achieves on average 77.20x and           reordering using graph partitioning [21], [22]. Firstly, when the
+                                                                                                                                                                                5.18x (up to 460.52x and 27.50x) speedups, respectively. Also,             matrix is divided and stored in each node, the irregularity and
+                                                                                                                                                                                our method bring on average 19.56x (up to 48.49x) speedup                  diversity of the distribution of nonzeros on sparse matrices
+                                                                                                                                                                                over a recently proposed hybrid distributed SpMV algorithm.                generally lead to imbalanced computations. However, graph
+                                                                                                                                                                                In addition, our algorithm achieves obviously better scalability
+                                                                                                                                                                                over these existing distributed SpMV methods.                              partitioning will not change the number of nonzeros in each
+                                                                                                                                                                                   Index Terms—Distributed memory system, sparse matrix-                   row or column, and thus the pattern of the sparsity is not nat-
+                                                                                                                                                                                vector multiplication, load balancing                                      urally ready for balanced computations and communications.
+                                                                                                                                                                                                                                                           Secondly, it should be noticed that each node can store a row
+                                                                                                                                                                                                        I. I NTRODUCTION                                   block, but the amount of local computations (i.e., the number
+                                                                                                                                                                                   Sparse matrix-vector multiplication (SpMV) multiplies a                 of nonzeros covered by the columns of diagonal block) is not
+                                                                                                                                                                                sparse matrix A with a dense vector x to get a resulting dense             directly given by matrix partitioning, which is another risk
+                                                                                                                                                                                vector y. It is one of the most fundamental routines of many               leading to load imbalance. In particular, when the number of
+                                                                                                                                                                                applications in computational science and engineering, and                 nodes increases, the performance of distributed SpMV may
+                                                                                                                                                                                may be the most studied kernel in sparse basic linear algebra              largely degrade due to the computation and communication
+                                                                                                                                                                                subprograms (BLAS) [1].                                                    imbalance.
+                                                                                                                                                                                   On shared memory systems like multi-core CPUs and many-                    To address the above mentioned challenges of distributed
+                                                                                                                                                                                core GPUs, accelerating SpMV received much attention, and                  SpMV, we in this paper propose an optimization algorithm
+                                                                                                                                                                                a number of techniques such as vectorization [2]–[4], block-               named DistSpMV_Balanced for distributed SpMV. The
+                                                                                                                                                                                ing [5]–[7], load balancing [8]–[10] and auto-tuning [11]–                 main target of this algorithm is to balance the computations
+                                                                                                                                                                                [13], have been proposed. Despite their effectiveness, when the            and communications between compute nodes, and thus to
+                                                                                                                                                                                input matrix A is large enough, a distributed memory system                improve the performance and scalability of distributed SpMV.
+                                                                                                                                                                                has to be used, and then the techniques for shared memory                  Firstly, a reordering through graph partitioning is still used for
+                                                                                                                                                                                machines could not be directly migrated to communication-                  providing a basic nonzero distribution to reduce the network
+                                                                                                                                                                                centric distributed computing pattern.                                     traffic. Secondly, the size of diagonal sub-matrix (i.e., its num-
+                                                                                                                                                                                   In distributed SpMV, each compute node of a cluster locally             ber of rows and columns) stored locally is analyzed according
+                                                                                                                                                                                stores a part of A and x, and generates a part of y. When the              to computations and communications, and then corresponding
+                                                                                                                                                                                components of x are not in the local storage, communications               numbers of rows and columns are decided. Thirdly, a two-
+                                                                                                                                                                                will occur, the requests of loading x from the other nodes                 level parallelism of MPI+OpenMP is exploited for better fine-
+                                                                                                                                                                                will be sent, and the corresponding components of x will                   grained cache locality within core-groups of nodes.
+                                                                                                                                                                                be received. Thereafter, the local SpMV computations will be                  In our experiments on a 256-core CPU cluster, our
+                                                                                                                                                                                completed.                                                                 DistSpMV_Balanced algoritm proposed is compared with
+
+
+                                                                                                                                                                              979-8-3503-0119-9/23/$31.00 ©2023 IEEE                                   535
+                                                                                                                                                                              DOI 10.1109/CCGrid57682.2023.00056
+                                                                                                                                                                                       Authorized licensed use limited to: HUNAN UNIVERSITY. Downloaded on May 20,2025 at 13:13:01 UTC from IEEE Xplore. Restrictions apply.
+three distributed SpMV methods: (1) one called DistSpMV                     sub-matrices and sub-vectors, and communications between
+on top of naı̈ve nonzero distribution, (2) the second one                   the nodes occur when running SpMV in the distributed en-
+called DistSpMV_Reordered running on the matrix pre-                        vironment. After receiving the components of x required,
+processed through the graph partitioning tool METIS devel-                  each process can calculate SpMV in parallel, and finally the
+oped by Karypis and Kumar [21], and (3) the third one called                resulting vector y is generated and communicated if needed.
+DistSpMV_hybrid developed by Page and Kogge [23]. By                        The following procedure lists the steps:
+using 20 representative matrices from the SuiteSparse Matrix                  1) Send sub-matrices and sub-vectors to each process.
+Collection (previously known as the University of Florida                     2) Processes communicate with each other, each sending xj
+Sparse Matrix Collection) [24] as the benchmark suite, the                       to the process that has the nonzero element Aij . As shown
+experimental results show that our DistSpMV_Balanced                             in Figure 2, there are four processes in total. According
+achieves on average 77.20x, 5.18x and 19.56x (up to                              to the principle of equalization, each process calculates
+460.52x, 27.50x, and 48.49x) speedups over DistSpMV,                             four lines respectively, and each node is assigned a
+DistSpMV_Reordered and DistSpMV_hybrid, respec-                                  corresponding vector. As can be seen, node3 needs to
+tively. The performance data on various number of pro-                           receive C0 from node 0, C4 and C5 from node1, C8,
+cesses/threads also demonstrate that our method has obvious                      C9, C10 and C11 from node2, and node3 receives seven
+better scalability.                                                              pieces of information in total. Similarly, node0 needs
+   This work makes the following contributions:                                  to receive C4 and C6 from node1, and C13 and C14
+   • We identify that matrix reordering techniques are not ad-                   from node3, node1 needs to receive C0, C1, and C2
+      equate to achieve good computation and communication                       from node0, C8, and C9 from node2, and C12, C13,
+      balancing, and thus more schemes are required.                             and C15 from node3. Finally, node0 receives a total of
+   • We design an algorithm called DistSpMV_Balanced                             four messages, node1 receives eight messages, and node2
+      that reorganizes the distribution of sparse matrix on com-                 receives six messages.
+      pute nodes for balanced computation and communication.                  3) yi *+=Aij ×xj in the process, where yi * is the intermedi-
+   • We evaluate the new algorithm by using 20 representative                    ate result.
+      sparse matrices on a 256-core cluster, and bring signifi-               4) Send intermediate result yi * to the final yi process.
+      cant speedups over existing work.                                       5) Add the yi * received to get the final result yi .
+            II. BACKGROUND AND M OTIVATION
+                                                                            C. Motivation
+A. SpMV
+   The SpMV operation multiplies a sparse matrix A with a                      The scalability of Distributed SpMV could be affected
+dense vector x to produce a dense vector y. Figure 1 shows                  by various factors. Now we analyze the example shown in
+a simple example of SpMV. In this case, yi is calculated by                 Figure 2, which is a sparse matrix already got reordered
+taking the dot product of Ai (row i of A) with the vector x.                through graph partitioning. We thus can see that the diagonal
+It is easy to see that there are no dependencies between rows               blocks contains the most nonzeros. However, although it is
+throughout the execution. Therefore, SpMV can be paralleized                well preprocessed, the problem of imbalanced load still exists.
+through dividing the matrix into many row blocks on modern                     First of all, as shown in Figure 2, distributed SpMV op-
+processors such as CPUs and GPUs.                                           eration generally requires a lot of communications between
+                                                                            various processes, which is one of the limiting factors of
+                                                                            distributed SpMV. Secondly, as explained in Section II-B,
+                                                                            the four nodes need to receive four, eight, six, and seven
+                                                                            pieces of messages (i.e., components of x) respectively. It can
+                                                                            be seen that the problem of imbalanced communication load
+                                                                            is restricting the performance of distributed SpMV. Thirdly,
+                                                                            the diversity of the sparsity patterns of matrices may lead to
+                                                                            imbalanced calculation after the matrix is divided into each
+                                                                            node. Although Figure 2 has been reorganized after graph
+                                                                            partitioning, the computational loads of each node are 16,
+                                                                            17, 18 and 19, respectively, and thus lead to imbalanced
+                                                                            computations. Finally, with the expansion of node size, the
+Fig. 1: An example of SpMV that multiplies a 6-by-6 sparse                  communication volume and time of distributed SpMV will
+matrix with a dense vector and gets a dense vector.                         increase significantly as well.
+                                                                               This has led to further optimization requirement of dis-
+B. Distributed SpMV                                                         tributed SpMV for computation and communication balancing.
+   In distributed SpMV, part of the matrix A and two vectors                In the next section, our DistSpMV_Balanced algorithm
+x and y are allocated in the corresponding compute nodes of                 and how we address these challenges will be explained in
+a cluster. A variety of division methods can generate different             detail.
+
+
+                                                                        536
+
+        Authorized licensed use limited to: HUNAN UNIVERSITY. Downloaded on May 20,2025 at 13:13:01 UTC from IEEE Xplore. Restrictions apply.
+                                  node0                                                                 node1
+                                                                  C                                                                          C
+                     4                              13   14                      0   1   2                 2
+                                                                                                           8   9                  13
+                                                                   0                                                                         4
+                     4                                            C                                                                          C
+                                                                   1
+                                                                                                           8                 12         15
+                                                                                                                                             5
+                                                                  C                                                                          C
+                     4        6                                                          2                 8
+                                                                   2                                                                         6
+                                                                   C                                                                         C
+                                                                   3                                                                         7
+
+
+                              sub-matrix                      sub-vector                              sub-matrix                       sub-vector
+
+
+
+                     4    5   6                12                 C                               5        8   9   10                        C1
+                                                                   8                                                                          2
+                                                                  C                                                10   11                   C1
+                     4                         12                                0            4                                               3
+                                                                   9
+                                                                  C1                                                                         C1
+                                               12   13   14        0             0                                 10                         4
+
+                                                    13
+                                                                  C1                              C
+                                                                                                  5
+                                                                                                                                             C1
+                                                                   1                              8                                           5
+
+
+                              sub-matrix                      sub-vector                              sub-matrix                       sub-vector
+
+                                  node2                                                                 node3
+Fig. 2: A 16×16 matrix and a vector of length 16 are evenly distributed on a four-node cluster for distributed computation of
+SpMV, where each sub-matrix is labeled with the column number of the non-zero element, and the non-zero element without
+the label is the local non-zero element, which can be computed with the sub-vector on that node, while the non-zero element
+with the label needs to communicate with the node containing the corresponding vector The non-zero element with the label
+needs to communicate with the node containing the corresponding vector to obtain the vector needed for the computation.
+Here we draw the communication situation with node 3 as an example, node 3 needs to get the 0th element of the vector from
+node 0, the 4th and 5th elements of the vector from node 1, and the 8th, 9th, 10th and 11th elements of the vector from node
+2, which requires 7 times of communication.
+
+                         III. M ETHODOLOGY                                      All matrices are stored in the CSR format. The CSR format
+A. Overview                                                                  consists of three arrays: (1) array rowptr stores the row offset
+                                                                             of the matrix, (2) array colidx stores the column index of
+   In order to describe our DistSpMV_Balanced algorithm
+                                                                             each nonzero element of the matrix, and (3) array val stores
+for optimizing distributed SpMV with more details, the data
+                                                                             the value of each nonzero element of the matrix. There are
+structure and the meanings of some variables used in our
+                                                                             also three integers and an array: (1) rownum is row number,
+algorithm are introduced in Section III-B. In Section III-C, a
+                                                                             (2) colnum is column number, (3) nnznum is number of
+16×16 matrix as an example is taken to describe in detail our
+                                                                             nonzero elements, and (4) array nodeid stores the process
+DistSpMV_Balanced optimization strategy for distributed
+                                                                             id that this nonzero element need to receive.
+SpMV. Firstly, in the preprocessing stage, graph partitioning
+is used to divide the graph corresponding to the sparse matrix,                 In the preprocessing process, six arrays are needed when
+and the partition results are used to reorder the matrix. At this            the original matrix is being divided the local matrix and the
+time, the nonzero elements are concentrated on the diagonal                  remote matrix: (1) array subrowadd of size p+1 records the
+block as much as possible to reduce the communication                        row number at the beginning of the diagonal matrix, (2) array
+volume. Secondly, we adjust the number of columns of the                     left_bound of size p records the column number at the
+diagonal block, and expand the number of nonzero elements                    beginning of the diagonal matrix, (3) array right_bound of
+in the diagonal block again to reduce the communication                      size p records the column number at the end of the diagonal
+volume between the computing nodes. Then, we split the                       matrix, (4) the size of array rowptr_start is the number of
+matrix into a local matrix and a remote matrix. For the remote               rows in the matrix and records the left-most nonzero element
+matrix, the number of row blocks are adjusted to balance the                 included by the local matrix in each row; (5) the size of array
+computation. Finally, the MPI+OpenMP hybrid programming                      rowptr_end is the number of rows in the matrix and records
+pattern is used to achieve two levels of parallelism and                     the right-most nonzero element included by the local matrix
+to optimize the distributed SpMV with computational load                     in each row. (6) The array nnznum is of size p, and records
+balancing between processes and threads. Detailed steps in                   the number of nonzero entries contained in each local matrix.
+DistSpMV_Balanced algorithm above are described in                              Each process calculates the communication information
+Section III-C.                                                               needed in the SpMV procedure, including one integer and
+                                                                             four arrays: (1) infocount is the number of messages, (2) array
+B. Data Structure                                                            sendid records the id of the process that sent the message,
+  We first define p as the number of processes. The large                    (3) array recvid records the id of the process that received
+matrix need to be divided into p local and p remote matrices.                the message, (4) array index records the position of the
+
+
+                                                                           537
+
+        Authorized licensed use limited to: HUNAN UNIVERSITY. Downloaded on May 20,2025 at 13:13:01 UTC from IEEE Xplore. Restrictions apply.
+                    0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+           0
+           1
+           2
+           3
+           4
+           5
+           6
+           7
+           8
+           9
+          10
+          11
+          12
+          13                                                                (c) To get the lower_bound=8 (d)To complete the diagrammatic                      (e) Local matrix(left) and remote matrix(right)
+          14
+                                                                                                         representation of the diagonal
+          15
+                                                                                                         block moving back
+         (a) The original vector and the matrix                    Step 2                      0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+                                                                                                                                                                                                     0
+                                                                                                                                                                                                     1
+
+                                   Step 1                                                P0
+                                                                                                                                       0     rownum=2             P0                                 2
+                                                                                                                                                                                                     3
+                                                                                                                                       1     nnznum=2                                                4       X0
+                                                                                                                                                                                                     5
+                     0 1 2 3 4 8 12 5 9 13 10 6 14 7 11 15                                                                                                                                           6
+                0                                                                                                                      2
+                1                                                                                                                            rownum=4                                                4
+                                                                                                                                       3
+                2                                                                        P1                                            4
+                                                                                                                                       5
+                                                                                                                                             nnznum=2                                                5
+                                                                                                                                                                                                     6       X1
+                3
+                                                                                                                                                                  P1
+                                                                                                                                                                                                     7
+                4                                                                                                                                                                                    8
+                                                                                                                                                                                                     9
+                8
+                                                                                         P2
+               12                                                                                                                      6     rownum=4
+                                                                                                                                       7                                                             8
+                5
+                9
+                                                                                                                                       8     nnznum=3             P2                                 9
+                                                                                                                                       9                                                             10
+                                                                                                                                                                                                     11      X2
+               13                                                                                                                                                                                    12
+               10                                                                                                                           rownum=6
+                6                                                                                                                      10
+                                                                                                                                            nnznum=2
+               14                                                                        P3                                            11
+                                                                                                                                       12
+                                                                                                                                       13
+                                                                                                                                                                  P3
+                                                                                                                                                                                                     12
+                                                                                                                                                                                                     13
+                                                                                                                                                                                                     14      X3
+                7                                                                                                                      14                                                            15
+               11                                                                                                                      15
+               15
+                                                                                          (g) The remote matrix is divided into
+         (b)Graph partitioning and rearrangement                                                                                                                (f) To partition of local matrix and local
+                                                                                          rows by the number of nonzeros
+         of vectors and matrix                                                                                                                                  vector
+                                                                                          elements
+
+
+                                                                                                   Step 3
+                                                                            0
+                                                                                     Four threads per process
+                                                             0
+                                                             1
+                                                                            1
+                                                                            2
+                                                                                                                                                                                     0                        0
+                                                                                                                                                                                     1                        1
+                                                                                                                                             P0
+                                                             2              3
+                                                             3
+                                                             4
+                                                                  X0        4
+                                                                            5
+                                                                            6
+                                                                                  P0                   OpenMP                                                                        2                        2
+                                             0               5
+    P0                                       1               6              8
+                                                                            11                                                                                           C
+                                                                                                                                                                                     3                        3
+                                                             4
+                                                                             4                                                                                           O           4                        4
+                                                                                                                                             P1
+                                             2               5
+    P1                                       3               6    X1         5
+                                                                             6
+                                                                                                                                                                         M           8                        5
+                                             4               7                                          OpenMP           Step 4                                          P
+                                                                                                                                                                                     12                       6
+                                                                                  P1
+                                                                             7
+                                             5               8                                                                                                           U
+                                                                             8
+                                                             9
+                                             6                               9
+                                                                             12
+                                                                                                                                                                         T           5 rearrange              7
+                                                                                                                                                                         E
+    P2
+                                             7               8                                                                                                                       9                        8
+                                             8
+                                             9
+                                                             9
+                                                             10   X2        8
+                                                                            9                                                                P2                          &
+                                                                                                                                                                         G           13                       9
+                                             10
+                                                             11
+                                                             12
+                                                                            10
+                                                                            11    P2                    OpenMP                                                           A
+                                                                                                                                                                         T
+                                                                                                                                                                                     10                      10
+                                             11
+    P3
+                                                                            12
+                                             12                             2                                                                                            H           6                       11
+                                                                            4
+                                             13              12                                                                                                          E           14                      12
+                                                                                                                                             P3
+                                             14              13             13
+                                                                                                                                                                         R
+                                             15              14   X3        12                                                                                                       7                       13
+    (h) Remote matrix nonzeros MPI
+                                                             15             13
+                                                                            14    P3                    OpenMP
+                                                                                                                                                                                     11                      14
+                                                                            15
+    communication vector acquisition process                                6                                                                                                        15                      15
+                                                                            8                                                               (j) Each thread calculates in parallel and finally
+                                                                                                                                            retrieves the result to obtain vector y
+
+Fig. 3: An example of the DistSpMV_Balanced algorithm. The sample 16×16 sparse matrix is divided into four processes
+and every process has four threads. First, the graph partitioning tool METIS is used to divide the corresponding graph of the
+matrix, and then the original matrix and vector are reordered according to the partition results. Second, we count the nonzero
+elements of the four diagonal blocks, take the maximum value as the threshold lower bound to adjust the number of columns
+of diagonal blocks, and move the right boundary of each diagonal block backward until the nonzero element in the block is
+greater than or equal to lower bound or move to the right boundary of the original matrix. The local matrix is evenly divided
+according to rows and the local vector is divided according to the position of nonzero element. At the same time, the number of
+rows of the remote matrix is adjusted to realize communication and calculate load balancing. Third, MPI parallelism between
+nodes and OpenMP parallelism within nodes are used for communication and computation. Finally, the calculated value of
+each process is recovered and sorted to get the final result.
+
+message in the vector, (5) The size of the array flag is the                                             is used as an example to show the specific process of the
+number of columns of the matrix, which records whether the                                               DistSpMV_Balanced Algorithm.
+elements at each position of the vector have been passed, and
+if they have been passed, they do not need to be passed again                                               In the first step, it should be noticed that the communica-
+                                                                                                         tion size in the distributed SpMV may restrict the scalability
+   That is all about the data structure. In the next sub-
+                                                                                                         and performance of the algorithm. As the number of processes
+section, DistSpMV_Balanced Algorithm will be described
+                                                                                                         increases, the communication volume in the algorithm will
+in depth.
+                                                                                                         keep increasing, and the communication time will become
+                                                                                                         the performance bottleneck of the algorithm after reaching a
+C. Algorithm Description
+                                                                                                         certain level. In the algorithm, at first, the graph partitioning
+  Figure 3 shows a sparse matrix of size 16×16 divided into                                              tool METIS is used to divide the corresponding graphs of
+four nodes. Distributed SpMV of four threads in each node                                                the matrices, and then reorder the original matrices according
+
+
+                                                                                                   538
+
+         Authorized licensed use limited to: HUNAN UNIVERSITY. Downloaded on May 20,2025 at 13:13:01 UTC from IEEE Xplore. Restrictions apply.
+Algorithm 1 Calculating local matrix boundary                               to 17, which reduces the amount of communication volume
+Input: subrowadd,rowptr_start,rowptr_end                                    between nodes.
+Output: left_bound,right_bound
+                                                                            Algorithm 2 Getting communication information
+ 1: for each i ∈ [0, p − 1] do
+ 2:   while right_bound[i] + 1 < matrix.colnum                    Input: Remote_matrix,Left_bound,Right_bound
+      and nnznum[i]< lower bound do                               Output: Comm
+ 3:      right ← matrix.colnum                                      1: F lag ← 0
+ 4:      for each j ∈ [subrowadd[i],subrowadd[i+1]]                 2: for each nz ∈ Remote matrix do
+         do                                                         3:    r ← nz.rowidx
+ 5:        begidx ←sourcematrix.rowptr[j+1]                         4:    if nz.colidx ∈
+                                                                                       / [ Left_bound[r], Right_bound[r]]
+ 6:        next ← rowptr_end[j]+1                                         and Flag[nz.colidx] = 0 then
+ 7:        if next < begidx then                                    5:       Flag[nz.colidx] = 1
+ 8:           next idx = sourcematrix.colidx[next]                  6:       Length = ⌊Colnum/p⌋
+                                                                    7:       need = nz.colidx/Length
+  9:           if next idx < right then                             8:       if need = p then
+ 10:              right = next id                                   9:          need = p − 1
+ 11:           end if                                              10:       end if
+ 12:        end if                                                 11:       Cur ← Comm[need]
+ 13:      end for                                                  12:       Cur.recvid[Cur.infocount] = i
+ 14:      right_bound[i] = right                                   13:       Cur.sendid[Cur.infocount] = need
+ 15:      for each j ∈ [subrowadd[i],subrowadd[i+1]] 14:                     Cur.index[Cur.infocount] = nz.colidx
+          do                                                       15:       Cur.inf ocount ++
+ 16:        begidx ←sourcematrix.rowptr[j+1]                       16:    end   if
+ 17:        next ← rowptr_end[j]+1                                 17: end   for
+ 18:        if next < begidx then
+ 19:           next idx = sourcematrix.colidx[next]                  In the second step, as shown in step 2 of the description
+                                                                  process of the Figure 3, the matrix is divided into local
+ 20:           if next idx = right then                           matrix and remote matrix. The local matrix does not need to
+ 21:              rowptr_end[j] = next idx                        communicate with each other. Therefore, we will try our best
+ 22:              nnznum[i] ++                                    to divide non-zero elements into the local matrix to further
+ 23:           end if                                             reduce the amount of communication volume. Meanwhile, in
+ 24:        end if                                                order to achieve communication load balancing, we will make
+ 25:      end for                                                 the following operations:
+ 26:   end while                                                     1. Count the number of nonzero elements of each diag-
+ 27: end for                                                      onal block, and use the maximum value as the threshold
+                                                                  lower bound. As shown in (e) in Figure 3, the fourth diagonal
+                                                                  block in (d) has a maximum of eight nonzero elements, so the
+to the result of the partitioning to achieve load balancing value of lower bound is selected as eight in the example.
+and reduce the communication. Compared with the matrix               2. Adjust the number of columns for each diagonal
+before reordering, the number of non-zero elements within block based on lower bound. Move the right boundary
+the four diagonal blocks of the reordered matrix increases and right bound of each diagonal block to the right until the
+the number of non-zero elements in the non-diagonal blocks number of nonzero elements is greater than or equal to
+decreases. This means that the number of vectors that need lower bound or until the right boundary of the large matrix is
+to be communicated by each node becomes reduced, and the reached. In the Figure 3, the red nonzero elements are added
+communication time as well as the program running time will to the local matrix. To achieve this, we employ a scanline
+be reduced also. At the same time, the vector is reordered algorithm, as shown in Algorithm 1, which maintains the
+according to the division results to ensure the correctness of left-most nonzero and right-most nonzero column numbers
+the calculation results.                                          rowptr start and rowptr end for each row in the diagonal
+   (a) to (b) of Figure 3 show an example of dividing the block, and the left-most and right-most column numbers
+graph corresponding to the sparse matrix and using the result lef t bound and right bound for the diagonal block. For each
+to reorder the matrix. Figure 3(a) is the original matrix, and diagonal block, we follow these steps to move right bound:
+Figure 3(b) is the matrix after the graph partitioning and matrix   a) If the matrix is not swept to the last column or the number
+rearrangement. Some nonzero elements of the matrix move                 of non-zero entries is less than lower bound, perform b
+toward the diagonal block. In Figure 3(a), the number of non-           and c; otherwise, exit the loop.
+diagonal block nonzero elements is 28, but in Figure 3(b), the      b) Find the non-zero element next to rowptr end for
+number of non-diagonal block nonzero elements is reduced                each row and set the minimum column id to the new
+
+
+                                                                        539
+
+        Authorized licensed use limited to: HUNAN UNIVERSITY. Downloaded on May 20,2025 at 13:13:01 UTC from IEEE Xplore. Restrictions apply.
+      right bound.                                                          of shared memory well for processes within the same node.
+  c) Update the rowptr end and number of non-zero bits in                   Therefore, we use OpenMP within a node to fully use the
+      each row.                                                             shared memory. In summary, a two-level parallel mode using
+   3. Divide the large matrix into local matrix and remote                  MPI parallelism between nodes and OpenMP parallelism
+matrix according to whether the nonzero element is included                 within nodes is used.
+in the extended diagonal block, as shown in (e) in Figure 3.                   In each process, local matrices can calculate SpMV using
+   4. Divide the local matrix into four local matrices according            local vectors, while remote matrices need to get the corre-
+to the row equalization strategy, and at the same time, the local           sponding vectors from other processes. So each process needs
+vectors required for partitioning are corresponding, as shown               to send and receive vector information to and from each other.
+in (f) of Figure 3. For example, there are nonzero elements                 In step 2, the information that needs to be sent has been
+in columns 0 to 6 of P0 , so the corresponding local vector is              passed to each process. As shown in the Algorithm 3, We
+rows 0 to 6 of the original vector.                                         use M P I Alltoall to get the number of messages that each
+                                                                            process needs to receive based on the number of messages
+Algorithm 3 Communication between nodes                                     that need to be sent, while sending and receiving the values
+Input: sub_Comm, x                                                          of the required vectors. After that, we iterate through all the
+Output: Comm                                                                non-zero elements of the remote matrix and expand the local
+ 1: for each message ∈ sub_Comm do                                          vector.
+ 2:   Id ← message.recvid                                                      Then, we divide the number of nonzero elements equally
+ 3:   Index ← message.index                                                 and allocate them to each thread so that each thread computes
+ 4:   Count ← send_Cnt[Id]                                                  the same number of nonzero elements as possible to achieve
+ 5:   vec_Val[Id][Count] = x[Index]                                         computation equalization, as shown in Algorithm 4.
+ 6:   send_Cnt[Id] ++
+ 7: end for
+                                                                            Algorithm 4 Computation balancing
+ 8: MPI Alltoall(send Cnt,recv Cnt)                                         Input: nnznum, nthreads
+ 9: for each i ∈ [0, p − 1] do                                              Output: y
+10:   if i ̸= P rocessId then                                                1: stridennz = ⌈nnznum/nthreads⌉
+11:      MPI Isend(vec_Val[i], send_Cnt[i])                                  2: for each tid ∈ [0, nthreads] in paraller do
+12:   end if                                                                 3:   boundary = tid ∗ stridennz
+13: end for                                                                  4:   if boundary > nnznum then
+14: for each i ∈ [0, p − 1] do                                               5:      boundary = nnznum
+15:   if i ̸= P rocessId then                                                6:   end if
+16:      MPI Recv(recv_Val[i], recv_Cnt[i])                                  7:   iter[tid] = binary search right(boundary)
+17:   end if                                                                 8: end for
+18: end for                                                                  9: for each tid ∈ [0, nthreads] in paraller do
+19: pos ← 0                                                                 10:   for each u ∈ [iter[tid], iter[tid+1] − 1] do
+20: for each colidx, nodeid ∈ sub Remote matrix do                          11:      y[u] = 0
+21:   val ← recv_Val[nodeid][pos[nodeid]]                                   12:      for each colidx, val ∈ sub matrix do
+22:   if x[colidx] = 0 then                                                 13:        y[u] += val ∗ x[colidx]
+23:      x[colidx] = val                                                    14:      end for
+24:      pos[nodeid] ++                                                     15:   end for
+25:   end if                                                                16: end for
+26: end for
+                                                                               In the last step, we combine the vectors computed by each
+   5. The number of rows in the remote matrix is divided                    process, and use the M P I Bcast function to send the number
+according to the nonzero element equalization strategy to                   of rows subm and the number of rows prefix and submadd
+achieve communication load balancing and reduce commu-                      of the sub-vectors to the individual processes, then gather the
+nication volume, as shown in Figure 3 (g).                                  sub-vectors using M P I Gatherv. Finally, restore the result
+   After that, we count the communication information be-                   vector y in the order of rearrangement, as shown in Figure 3
+tween each process. As shown in the Algorithm 2. Finally,                   (j).
+we send each local matrix, remote matrix, vector and commu-
+                                                                                                IV. E XPERIMENT R ESULTS
+nication information to the four processes.
+   In the third step, each process of the distributed SpMV                  A. Experimental Setup and Dataset
+needs to communicate with other processes to exchange vector                   DistSpMV_Balanced algorithm is tested on a cluster
+values with each other. Some processes communicate within                   equipped with eight nodes, and each one has one AMD
+the same node and some communicate across nodes, but the                    32-core EPYC 7551 CPU and 128GB DRAM, the nodes
+communication mode using MPI alone cannot take advantage                    are connected with 200Gb InfiniBand network. We use the
+
+
+                                                                        540
+
+        Authorized licensed use limited to: HUNAN UNIVERSITY. Downloaded on May 20,2025 at 13:13:01 UTC from IEEE Xplore. Restrictions apply.
+SuiteSparse Matrix Collection (previously known as the Uni-                 Compared with DistSpMV_Balanced, an average speedup
+versity of Florida Sparse Matrix Collection) [24] as our                    ratio of 5.18x is obtained, with the best observed speedup
+dataset. 20 representative matrices are selected to illustrate              of 8.94x (found in matrix ‘cant’). Also, both the regular and
+the performance of DistSpMV_Balanced algorithm. These                       the irregular matrices gain significant acceleration. With the
+matrix structures are shown in Table I. In order to prove the               expansion of the number of processes, the performance of most
+generality of algorithm optimization, the 20 sparse matrices                matrices has been improved. Although the performance of the
+include the first four regular matrices with non-zero elements              other four matrices (‘nlpkkt80’, ‘vas stokes 1M’, ‘Ecology1’,
+mainly concentrated in the diagonal and the last 16 irregular               ‘cant’) has decreased, the overall performance compared with
+matrices with random distribution of non-zero elements.                     the other two algorithms still greatly improved. Among them,
+   Three algorithms, DistSpMV, DistSpMV_Reordered,                          matrix ‘cant’ obtains the maximum performance acceleration
+and DistSpMV_Balanced, are tested on the platform. We                       ratio.
+set the number of processes to 1, 2, 4, 8, 16, 32, and 64, with                Specifically, two representative matrices ‘road central’ and
+four threads for each process. We run each SpMV 50 times                    ‘inline 1’ are selected to analyze our implementation for
+and report the average execution time.                                      reducing communication volume and realizing computational
+                                                                            load balancing.
+      TABLE I: The 20 representative matrices tested.                          Firstly, the communication volume between the two matri-
+                                                                            ces in eight processes under three algorithms are counted, and
+         Matrix            Plot             Size             nnz
+                                                                            the communication heap maps are drawn as shown in (a) and
+          cant                         62.4K×62.4K            4M            (b) of Figure 5. The horizontal and vertical coordinates of the
+                                                                            graph are the process numbers respectively. The DistSpMV
+        bone010                       986.7K×986.7K         47.8M           algorithm of the two matrices has a very imbalanced commu-
+         rajat31                        4.6M×4.6M           20.3M           nication load and a large amount of communication, which
+                                                                            causes a large communication volume and leads to poor per-
+        ecology1                          1M×1M              4.9M           formance of distributed SpMV. The intermediate thermal map
+        asia osm                       11.9M×11.9M          25.4M           of (a) and (b) is the communication heap map of each process
+                                                                            of the DistSpMV_Reordered algorithm after being divided
+          ldoor                       852.2K×952.2K         42.4M           by the graph. Compared with the DistSpMV algorithm, the
+        nlpkkt80                          1M×1M             28.1M
+                                                                            traffic of all processes has been greatly reduced. Finally, after
+                                                                            adjusting the number of columns by DistSpMV_Balanced
+     dielFilterV2real                   1.1M×1.1M           48.5M           algorithm and placing nonzero elements on the local matrix
+                                                                            as much as possible, the traffic between the eight processes is
+     rgg n 2 21 s0                        2M×2M             28.9M
+                                                                            shown in the last heat map of (a) and (b). The further light-
+      road central                       14M×14M            33.8M           ening of the colors compared with DistSpMV_Reordered
+                                                                            thermal maps indicates a further decrease in traffic. In (c),
+        inline 1                      503.7K×503.7K         36.8M
+                                                                            we further compared DistSpMV_Reordered with our
+    hugebubbles00000                    18.3×18.3M          54.9M           DistSpMV_Balanced algorithm. The two line charts on
+                                                                            the left of (c) compare the traffic of each process, which
+      germany osm                      11.5M×11.5M          24.7M
+                                                                            are more intuitive than the heat map. For the most part,
+        italy osm                       6.6M×6.6M            14M            our algorithm has less inter-process communication volumes
+                                                                            than the DistSpMV_Reordered algorithm. The compar-
+        adaptive                        6.8M×6.8M           27.2M           ison of the middle two figures in Figure (c) shows that
+     vas stokes 1M                        1M×1M             34.7M           DistSpMV_Balanced requires more local computations,
+                                                                            which again indicates that the DistSpMV_Balanced algo-
+         AS365                          3.7M×3.7M           22.7M           rithm reduces the number of nonzero elements in the remote
+           M6                           3.5M×3.5M            21M
+                                                                            matrix, which reduces the communication volume.
+                                                                               Secondly, for communication load balancing and calculation
+          NLR                           4.1M×4.1M           24.9M           balancing, the calculation amount of nonzero element of the
+        audikw 1                      943.6K×943.6K         77.6M
+                                                                            remote matrix in each process is counted. The two right-most
+                                                                            line drawings in Figure 5 (c) compare the calculation amount
+                                                                            of the remote matrix of the two algorithms. Our optimization
+B. Performance Comparison of Three Algorithms                               strategy includes adjusting the number of rows of the remote
+   Figure 4 shows the performance comparison of the 20 repre-               matrix to achieve the nonzero number load balancing of the
+sentative matrices DistSpMV, DistSpMV_Reordered and                         remote matrix for each node and the calculation balance of the
+our optimization algorithm DistSpMV_Balanced, respec-                       remote matrix, so as to achieve the communication load bal-
+tively. The DistSpMV_Balanced optimization results in                       ancing. Therefore, the DistSpMV_Balanced remote matrix
+an average speedup of 77.20x compared with DistSpMV.                        of the balanced algorithm is close to a straight line on the line
+
+
+                                                                        541
+
+        Authorized licensed use limited to: HUNAN UNIVERSITY. Downloaded on May 20,2025 at 13:13:01 UTC from IEEE Xplore. Restrictions apply.
+                                  audikw_1                                              bone010                                                  dielFilterV2real                                      asia_osm                                               ldoor
+ GFlops
+
+
+
+
+          50                                                            60                                                    45                                                   25                                                         70
+          45                   DistSpMV                                                                                       40                                                                                                              60
+          40                                                            50                                                                                                         20
+                               DistSpMV_Reordered                                                                             35
+          35                                                                                                                                                                                                                                  50
+                                                                        40                                                    30
+          30                   DistSpMV_Balanced(our work)                                                                    25
+                                                                                                                                                                                   15                                                         40
+          25                                                            30
+                                                                                                                              20                                                                                                              30
+          20                                                                                                                                                                       10
+          15                                                            20                                                    15
+                                                                                                                                                                                                                                              20
+          10                                                                                                                  10                                                    5
+                                                                        10                                                                                                                                                                    10
+           5                                                                                                                   5
+           0                                                             0                                                     0                                                    0                                                          0
+                1         2        4        8         16     32   64         1     2    4      8         16        32    64         1     2       4         8     16    32    64         1    2         4          8    16       32      64        1    2     4         8    16   32     64
+
+                                  nlpkkt80                                              rajat31                                                  rgg_n_2_21_s0                                         road_central                                           inline_1
+ GFlops
+
+
+
+
+          25                                                            35                                                    40                                                    25                                                        45
+                                                                        30                                                    35                                                                                                              40
+          20                                                                                                                                                                        20                                                        35
+                                                                        25                                                    30
+                                                                                                                                                                                                                                              30
+          15                                                                                                                  25                                                    15
+                                                                        20                                                                                                                                                                    25
+                                                                                                                              20
+                                                                        15                                                                                                                                                                    20
+          10                                                                                                                  15                                                    10
+                                                                                                                                                                                                                                              15
+                                                                        10                                                    10
+           5                                                                                                                                                                         5                                                        10
+                                                                         5                                                     5                                                                                                               5
+           0                                                             0                                                     0                                                     0                                                         0
+                1         2        4        8         16     32   64         1     2    4      8         16        32    64         1     2       4         8     16    32    64         1    2         4          8    16       32      64        1     2    4         8    16   32     64
+
+                              hugebubbles-00000                                        germany_osm                                               italy_osm                                                   adaptive                                         ecology1
+ GFlops
+
+
+
+
+          40                                                            30                                                    20                                                   40                                                         30
+          35                                                                                                                  18                                                   35
+                                                                        25                                                    16                                                                                                              25
+          30                                                                                                                                                                       30
+                                                                        20                                                    14                                                                                                              20
+          25                                                                                                                  12                                                   25
+          20                                                            15                                                    10                                                   20                                                         15
+          15                                                                                                                   8                                                   15
+                                                                        10                                                     6                                                                                                              10
+          10                                                                                                                                                                       10
+                                                                         5                                                     4                                                                                                               5
+           5                                                                                                                   2                                                    5
+           0                                                             0                                                     0                                                    0                                                          0
+                1         2        4        8         16     32   64         1     2    4      8         16        32    64         1     2       4         8     16    32    64         1    2         4          8    16       32      64        1    2     4         8    16   32     64
+
+                               vas_stokes_1M                                                AS365                                                       M6                                                     NLR                                            cant
+ GFlops
+
+
+
+
+          25                                                            20                                                    20                                                    25                                                        45
+                                                                        18                                                    18                                                                                                              40
+          20                                                            16                                                    16                                                    20                                                        35
+                                                                        14                                                    14                                                                                                              30
+          15                                                            12                                                    12                                                    15
+                                                                                                                                                                                                                                              25
+                                                                        10                                                    10
+                                                                                                                                                                                                                                              20
+          10                                                             8                                                     8                                                    10
+                                                                         6                                                     6                                                                                                              15
+           5                                                             4                                                     4                                                     5                                                        10
+                                                                         2                                                     2                                                                                                               5
+           0                                                             0                                                     0                                                     0                                                         0
+                1         2        4        8         16     32   64         1     2    4      8         16        32    64         1     2       4         8     16    32    64         1   1.13       4          8    16       32      64        1     2    4         8    16   32     64
+
+
+
+Fig. 4: The performance and scalability (each sub-figure represents running a sparse matrix on different number of processes) of
+the three methods DistSpMV, DistSpMV_Reordered and DistSpMV_Balanced. The x axis is the number of processes
+(each process has four threads), the y axis is the performance in GFlops.
+
+
+
+
+                        (a) From left to right is three heat maps of the traffic between various                                                                       (b) From left to right is three heat maps of the traffic between various
+                        processes in DistSpMV, DistSpMV_Reordered, and DistSpMV_Balanced                                                                               processes in DistSpMV, DistSpMV_Reordered, and DistSpMV_Balanced
+                        for matrix road_central                                                                                                                        for matrix inline_1
+                                                           road_central                                                                          road_central                                                                                 road_central
+               700                                                                                       6000000                                                                                      800
+                                          DistSpMV_Reordered                                                                        DistSpMV_Reordered                                                700                     DistSpMV_Reordered
+               600                                                                                       5000000
+                                          DistSpMV_Balanced(our work)                                                               DistSpMV_Balanced(our work)                                                               DistSpMV_Balanced(our work)
+                                                                                                                                                                                                      600
+               500
+                                                                                                         4000000
+                                                                                                                                                                                                      500
+               400
+                                                                                                         3000000                                                                                      400
+               300
+                                                                                                                                                                                                      300
+                                                                                                         2000000
+               200                                                                                                                                                                                    200
+               100                                                                                       1000000
+                                                                                                                                                                                                      100
+                    0                                                                                         0                                                                                         0
+
+                        np0       np1           np2         np3       np4        np5    np6        np7             np0        np1       np2           np3       np4     np5        np6       np7             np0        np1        np2         np3      np4       np5       np6    np7
+                                                           inline_1                                                                              inline_1                                                                                          inline_1
+           14000                                                                                         4900000                                                                                    180000
+           12000                                                                                         4800000                                                                                    160000
+                                                                                                         4700000                                                                                    140000
+           10000
+                                                                                                                                                                                                    120000
+                                                                                                         4600000
+               8000                                                                                                                                                                                 100000
+                                                                                                         4500000
+               6000                                                                                                                                                                                 80000
+                                                                                                         4400000
+                                                                                                                                                                                                    60000
+               4000
+                                                                                                         4300000                                                                                    40000
+               2000                                                                                      4200000                                                                                    20000
+                    0                                                                                    4100000                                                                                        0
+
+                        np0       np1           np2         np3       np4        np5    np6        np7             np0        np1       np2           np3       np4     np5        np6       np7             np0        np1        np2         np3      np4       np5       np6    np7
+
+
+
+                                 (c)From left to right, the communication volume of each process, the computation volume of local matrix and the
+                                 computation volume of remote matrix in METIS and our work are compared
+
+Fig. 5: Heatmaps of communication of each process of ‘road central’ and ‘inline 1’, two representative matrices executed by
+running eight processes under the three algorithms. And we compare the traffic, local matrix computation, and remote matrix
+computation of the two matrices under DistSpMV_Reordered and DistSpMV_Balanced algorithms.
+
+
+
+
+                                                                                                                                                       542
+
+                              Authorized licensed use limited to: HUNAN UNIVERSITY. Downloaded on May 20,2025 at 13:13:01 UTC from IEEE Xplore. Restrictions apply.
+          6                                                                                                                                                                                                                                                                                                                                    18000
+
+
+
+
+                                                                                                                                                                                                                                                                                                                         Preprocess time(ms)
+                                                                                                                                                                                                                                                     DistSpMV_Hybird                                                                                   DistSpMV_Reordered
+                                                                                                                                                                                                                                                                                                                                               16000
+          5                                                                                                                                                                                                                                                                                                                                            DistSpMV_Balanced(our work)
+ GFlops
+
+                                                                                                                                                                                                                                                     DistSpMV_Balanced(our work)                                                               14000
+                                                                                                                                                                                                                                                                                                                                               12000
+          4
+                                                                                                                                                                                                                                                                                                                                               10000
+          3                                                                                                                                                                                                                                                                                                                                     8000
+                                                                                                                                                                                                                                                                                                                                                6000
+          2
+                                                                                                                                                                                                                                                                                                                                                4000
+                                                                                                                                                                                                                                                                                                                                                2000
+          1
+                                                                                                                                                                                                                                                                                                                                                   0
+          0
+                                                        l                          r                                                                     l                                                                                                                                                    nt
+                      _1                 10          ea                m        oo              80               31              s0                 t ra                _1                  00               m                 m             tiv
+                                                                                                                                                                                                                                                e
+                                                                                                                                                                                                                                                            gy
+                                                                                                                                                                                                                                                              1
+                                                                                                                                                                                                                                                                             1M         65       6
+                                                                                                                                                                                                                                                                                                      LR
+                 kw                  0          2r                   os    ld              kt             ja
+                                                                                                             t
+                                                                                                                            1_                  n                   e                  00                  os                os                                         s_
+                                                                                                                                                                                                                                                                                    3        M       N     ca
+               di               ne            rV              ia
+                                                                 _                       pk          ra                _2                  ce                   lin                0                  y_               ly_              ap            ol
+                                                                                                                                                                                                                                                        o
+                                                                                                                                                                                                                                                                                  AS
+                           bo                                                          nl                                             d_
+                                                                                                                                                             in                 s-               an                                ad               ec             ke
+          au                          lte                   as                                                    _2                                                         le                                  ita                                        st
+                                                                                                                                                                                                                                                               o
+                                    Fi                                                                       _n              ro
+                                                                                                                                a
+                                                                                                                                                                        bb                  rm
+                                  el                                                                    g                                                                              ge                                                                s_
+                                di                                                                   rg                                                          eb
+                                                                                                                                                                    u
+                                                                                                                                                                                                                                                      va
+                                                                                                                                                             g
+                                                                                                                                                        hu                                                                                                                                                           Fig. 7: The preprocessing cost of 20 matrices under
+Fig.     6:      Performance     comparison between                                                                                                                                                                                                                                                                  DistSpMV_Reordered and DistSpMV_Balanced algo-
+DistSpMV_Balanced and DistSpMV _Hybrid with                                                                                                                                                                                                                                                                          rithms. It can be seen that our method only brings negligible
+256 cores (64 processes ×4threads).                                                                                                                                                                                                                                                                                  extra cost over reordering.
+
+chart. It shows the effectiveness of our strategy in achieving
+communication and computation balancing.                                                                                                                                                                                                                                                                             formats for better data locality. Several studies optimized and
+                                                                                                                                                                                                                                                                                                                     evaluated SpMV on heterogeneous processors [25], [26].As
+C. Comparison with Existing Work DistSpMV_Hybrid                                                                                                                                                                                                                                                                     for auto-tuning methods, Li et al. [11] proposed a machine
+   The performance data of 20 matrices under                                                                                                                                                                                                                                                                         learning framework called SMAT for auto-tuning SpMV. Zhao
+DistSpMV_Balanced and Hybrid_SpMV algorithms are                                                                                                                                                                                                                                                                     et al. [12] used computer vision and deep learning for selecting
+shown in Figure 6. We compare performance under the same                                                                                                                                                                                                                                                             formats, and Du et al. [13] recently designed AlphaSparse for
+conditions of 64 processes with four threads per process.                                                                                                                                                                                                                                                            automatically generating sparse formats for SpMV. However,
+As can be seen from Figure 6, DistSpMV_Balanced                                                                                                                                                                                                                                                                      unfortunately, none of those highly optimized shared memory
+has achieved significant performance improvement compared                                                                                                                                                                                                                                                            methods could be directly migrated to distributed platforms.
+with DistSpMV_Hybrid. Statistically, we achieved an                                                                                                                                                                                                                                                                  In contrast, we in this work focus on scalability of distributed
+average acceleration ratio of 19.56x (up to 48.49x). The                                                                                                                                                                                                                                                             SpMV. Furthermore, our findings and techniques may bring
+performance of all matrices has been greatly improved. For                                                                                                                                                                                                                                                           new performance tuning opportunities for SpMV in a single
+‘bone010’, ‘ldoor’ and other matrices, DistSpMV_Hybrid                                                                                                                                                                                                                                                               node, since emerging larger chiplet-based processors [27] are
+degradation is very obvious, while DistSpMV_Balanced                                                                                                                                                                                                                                                                 likely encountering more NUMA effects [28], which needs
+still has a good performance, which shows the effectiveness                                                                                                                                                                                                                                                          some distributed thinking to optimize.
+of DistSpMV_Balanced algorithm.
+                                                                                                                                                                                                                                                                                                                        As for SpMV on distributed memory systems, developing
+D. Preprocessing Overhead                                                                                                                                                                                                                                                                                            graph and hypergraph partitioning approaches is the major di-
+   The preprocessing overhead is an important metric of                                                                                                                                                                                                                                                              rection [22]. Specifically, Hendrickson and Kolda [29] proved
+distributed SpMV. We test the 20 matrices and record                                                                                                                                                                                                                                                                 that the performance of parallel SpMV depends on the parti-
+the preprocessing overhead of DistSpMV_Reordered and                                                                                                                                                                                                                                                                 tioning, and proposed several effective approaches. Aykanat et
+DistSpMV_Balanced algorithms in 64 processes (under                                                                                                                                                                                                                                                                  al. [30] transformed the matrix decomposition problem into the
+256 threads), as shown in Figure 7. the nonzero element                                                                                                                                                                                                                                                              idea of dividing diagonal blocks for data locality. Nicol [14]
+distribution diversity of different matrices leads to different                                                                                                                                                                                                                                                      proposed that the sparse matrix partitioning can be divided
+preprocessing time cost, and the cost changes of the two algo-                                                                                                                                                                                                                                                       into one- and two-dimensional patterns. In order to better
+rithms are roughly the same. At the same time, overall, our op-                                                                                                                                                                                                                                                      adapt SpMV algorithm to large-scale systems, Hendrickson
+timization on top of the graph partitioning does not cost much                                                                                                                                                                                                                                                       et al. [31] proposed a 2D algorithm, and Kayaaslan et al. [32]
+additional overhead. Among these 20 matrices, the maximum                                                                                                                                                                                                                                                            developed a 1.5D method, and Çatalyürek et al. [33], [34]
+preprocessing cost is 1.31x that of DistSpMV_Reordered                                                                                                                                                                                                                                                               proposed several effective improvements in distributed SpMV.
+algorithm (at matrix ‘cant’), and the minimum preprocessing                                                                                                                                                                                                                                                          Uçar and Aykanat [35] and Li et al. [19] discussed how compu-
+cost is only 1.05x (at matrix ‘italy osm’ ).                                                                                                                                                                                                                                                                         tations and communications can overlap. Acer et al. [36], [37]
+                                                                                                                                                                                                                                                                                                                     designed methods for lowering latency. For higher scalability,
+                                                                                                 V. R ELATED W ORK                                                                                                                                                                                                   Boman et al. [38] and Bienz et al. [39] proposed a node-
+   Much research has been conducted for SpMV on shared                                                                                                                                                                                                                                                               aware parallel SpMV algorithms. Devine et al. [40] discussed
+memory systems. A number of studies were focusing on                                                                                                                                                                                                                                                                 the use of hypregraph partitioning in scientific computing.
+designing formats for faster SpMV. Kreutzer et al. [3] and                                                                                                                                                                                                                                                           Recently, Buluç et al. [41] and Çatalyürek et al. [22] surveyed
+Gómez et al. [4] developed ELL-like sparse formats for utiliz-                                                                                                                                                                                                                                                      the progress in this area. Compared to only using graph or
+ing longer vector units in modern processors. Kourtis et al. [2],                                                                                                                                                                                                                                                    hypergraph partitioning, we in this paper further reorganized
+Greathouse and Daga [8], Liu and Vinter [9], and Merrill and                                                                                                                                                                                                                                                         the distribution of nonzeros for balancing computations and
+Garland [10] developed variants of the CSR format. Im et                                                                                                                                                                                                                                                             communications, and show obvious speedups over SpMV only
+al. [5], Vuduc et al. [6] and Niu et al. [7] studied blocking                                                                                                                                                                                                                                                        using matrix partitioning.
+
+
+                                                                                                                                                                                                                                                                                                                   543
+
+                                 Authorized licensed use limited to: HUNAN UNIVERSITY. Downloaded on May 20,2025 at 13:13:01 UTC from IEEE Xplore. Restrictions apply.
+                           VI. C ONCLUSION                                         [18] S. Lee and R. Eigenmann, “Adaptive runtime tuning of parallel sparse
+                                                                                        matrix-vector multiplication on distributed memory systems,” in ICS ’08,
+   In this paper, we have proposed an algorithm called                                  2008, pp. 195–204.
+DistSpMV_Balanced that uses optimization strategies to                             [19] S. Li, C. Hu, J. Zhang, and Y. Zhang, “Automatic tuning of sparse
+balancing computations and communications of SpMV on dis-                               matrix-vector multiplication on multicore clusters,” Science China In-
+                                                                                        formation Sciences, vol. 58, no. 9, pp. 1–14, 2015.
+tributed clusters. By testing 20 representative sparse matrices,                   [20] M. Belgin, G. Back, and C. J. Ribbens, “A library for pattern-based
+our method is on average 77.20x and 5.18x (up to 460.52x and                            sparse matrix vector multiply,” International Journal of Parallel Pro-
+27.50x) faster than classic distributed SpMV implementation                             gramming, vol. 39, no. 1, pp. 62–87, 2011.
+                                                                                   [21] G. Karypis and V. Kumar, “Analysis of multilevel graph partitioning,”
+and its variant reordered with graph partitioning. Compared                             in SC ’95, 1995, p. 29–es.
+with a recent hybrid distributed SpMV algorithm, our method                        [22] U. V. Çatalyürek, K. D. Devine, M. F. Faraj, L. Gottesbüren, T. Heuer,
+bring on average 19.56x (up to 48.49x) speedup.                                         H. Meyerhenke, P. Sanders, S. Schlag, C. Schulz, D. Seemaier, and
+                                                                                        D. Wagner, “More recent advances in (hyper)graph partitioning,” ACM
+                                                                                        Comput. Surv., 2022.
+                          ACKNOWLEDGMENT                                           [23] B. A. Page and P. M. Kogge, “Scalability of hybrid sparse matrix dense
+  We deeply appreciate the invaluable comments from all the                             vector (spmv) multiplication,” in 2018 International Conference on High
+                                                                                        Performance Computing & Simulation (HPCS). IEEE, 2018, pp. 406–
+reviewers. Weifeng Liu is the corresponding author of this                              414.
+paper. This research was supported by the National Natural                         [24] T. A. Davis and Y. Hu, “The university of florida sparse matrix collec-
+Science Foundation of China under Grant No. 61972415.                                   tion,” ACM Transactions on Mathematical Software (TOMS), vol. 38,
+                                                                                        no. 1, pp. 1–25, 2011.
+                                                                                   [25] W. Liu and B. Vinter, “Speculative segmented sum for sparse matrix-
+                               R EFERENCES                                              vector multiplication on heterogeneous processors,” Parallel Computing,
+ [1] I. S. Duff, M. A. Heroux, and R. Pozo, “An overview of the sparse basic            vol. 49, no. C, pp. 179–193, 2015.
+     linear algebra subprograms: The new standard from the blas technical          [26] F. Zhang, W. Liu, N. Feng, J. Zhai, and X. Du, “Performance evaluation
+     forum,” ACM Trans. Math. Softw., vol. 28, no. 2, p. 239–267, 2002.                 and analysis of sparse matrix and graph kernels on heterogeneous
+ [2] K. Kourtis, V. Karakasis, G. Goumas, and N. Koziris, “Csx: An extended             processors,” CCF Transactions on High Performance Computing, 2019.
+     compression format for spmv on shared memory systems,” in PPoPP               [27] S. Naffziger, N. Beck, T. Burd, K. Lepak, G. H. Loh, M. Subramony,
+     ’11, 2011, pp. 247–256.                                                            and S. White, “Pioneering chiplet technology and design for the amd
+ [3] M. Kreutzer, G. Hager, G. Wellein, H. Fehske, and A. R. Bishop, “A                 epyc™ and ryzen™ processor families : Industrial product,” in ISCA
+     unified sparse matrix data format for efficient general sparse matrix-             ’21, 2021, pp. 57–70.
+     vector multiplication on modern processors with wide simd units,” SIAM        [28] X. Yu, H. Ma, Z. Qu, J. Fang, and W. Liu, “Numa-aware optimiza-
+     Journal on Scientific Computing, vol. 36, no. 5, pp. C401–C423, 2014.              tion of sparse matrix-vector multiplication on armv8-based many-core
+ [4] C. Gómez, F. Mantovani, E. Focht, and M. Casas, “Efficiently running              architectures,” in NPC ’21, 2021, pp. 231–242.
+     spmv on long vector architectures,” in PPoPP ’21, 2021, p. 292–303.           [29] B. Hendrickson and T. G. Kolda, “Partitioning rectangular and struc-
+ [5] E.-J. Im, K. Yelick, and R. Vuduc, “Sparsity: Optimization framework               turally unsymmetric sparse matrices for parallel processing,” SIAM
+     for sparse matrix kernels,” The International Journal of High Perfor-              Journal on Scientific Computing, vol. 21, no. 6, pp. 2048–2072, 2000.
+     mance Computing Applications, vol. 18, no. 1, pp. 135–158, 2004.              [30] C. Aykanat, A. Pinar, and Ü. V. Çatalyürek, “Permuting sparse rect-
+ [6] R. Vuduc, J. W. Demmel, K. A. Yelick, S. Kamil, R. Nishtala, and                   angular matrices into block-diagonal form,” SIAM Journal on scientific
+     B. Lee, “Performance optimizations and bounds for sparse matrix-vector             computing, vol. 25, no. 6, pp. 1860–1879, 2004.
+     multiply,” in SC ’02, 2002, pp. 26–26.                                        [31] B. Hendrickson, R. Leland, and S. Plimpton, “An efficient parallel
+ [7] Y. Niu, Z. Lu, M. Dong, Z. Jin, W. Liu, and G. Tan, “Tilespmv: A tiled             algorithm for matrix-vector multiplication,” International Journal of
+     algorithm for sparse matrix-vector multiplication on gpus,” in IPDPS               High Speed Computing, vol. 7, no. 01, pp. 73–88, 1995.
+     ’21, 2021, pp. 68–78.                                                         [32] E. Kayaaslan, C. Aykanat, and B. Uçar, “1.5d parallel sparse matrix-
+ [8] J. L. Greathouse and M. Daga, “Efficient sparse matrix-vector multi-               vector multiply,” SIAM Journal on Scientific Computing, vol. 40, no. 1,
+     plication on gpus using the csr storage format,” in SC ’14, 2014, pp.              pp. C25–C46, 2018.
+     769–780.                                                                      [33] U. Catalyurek and C. Aykanat, “Hypergraph-partitioning-based decom-
+ [9] W. Liu and B. Vinter, “Csr5: An efficient storage format for cross-                position for parallel sparse-matrix vector multiplication,” IEEE Transac-
+     platform sparse matrix-vector multiplication,” in ICS ’15, 2015, pp. 339–          tions on Parallel and Distributed Systems, vol. 10, no. 7, pp. 673–693,
+     350.                                                                               1999.
+[10] D. Merrill and M. Garland, “Merge-based parallel sparse matrix-vector         [34] U. V. Çatalyürek, C. Aykanat, and B. Uçar, “On two-dimensional sparse
+     multiplication,” in SC ’16, 2016, pp. 678–689.                                     matrix partitioning: Models, methods, and a recipe,” SIAM Journal on
+[11] J. Li, G. Tan, M. Chen, and N. Sun, “Smat: An input adaptive auto-                 Scientific Computing, vol. 32, no. 2, pp. 656–683, 2010.
+     tuner for sparse matrix-vector multiplication,” in PLDI ’13, 2013, pp.        [35] B. Uçar and C. Aykanat, “Revisiting hypergraph models for sparse
+     117–126.                                                                           matrix partitioning,” SIAM Review, vol. 49, no. 4, pp. 595–603, 2007.
+[12] Y. Zhao, J. Li, C. Liao, and X. Shen, “Bridging the gap between deep          [36] S. Acer, O. Selvitopi, and C. Aykanat, “Optimizing nonzero-based sparse
+     learning and sparse matrix format selection,” in PPoPP ’18, 2018, pp.              matrix partitioning models via reducing latency,” Journal of Parallel and
+     94–108.                                                                            Distributed Computing, vol. 122, pp. 145–158, 2018.
+[13] Z. Du, J. Li, Y. Wang, X. Li, G. Tan, and N. Sun, “Alphasparse:               [37] ——, “Addressing volume and latency overheads in 1d-parallel sparse
+     Generating high performance spmv codes directly from sparse matrices,”             matrix-vector multiplication,” in Euro-Par 2017: Parallel Processing,
+     in SC ’22, 2022, pp. 952–966.                                                      2017, pp. 625–637.
+[14] D. M. Nicol, “Rectilinear partitioning of irregular data parallel compu-      [38] E. G. Boman, K. D. Devine, and S. Rajamanickam, “Scalable matrix
+     tations,” Journal of Parallel and Distributed Computing, vol. 23, no. 2,           computations on large scale-free graphs using 2d graph partitioning,” in
+     pp. 119–134, 1994.                                                                 SC ’13, 2013.
+[15] M. J. Berger and S. H. Bokhari, “A partitioning strategy for nonuni-          [39] A. Bienz, W. D. Gropp, and L. N. Olson, “Node aware sparse matrix–
+     form problems on multiprocessors,” IEEE Transactions on Computers,                 vector multiplication,” Journal of Parallel and Distributed Computing,
+     vol. 36, no. 05, pp. 570–580, 1987.                                                vol. 130, pp. 166–178, 2019.
+[16] M. Ujaldon, S. D. Sharma, E. L. Zapata, and J. Saltz, “Experimental           [40] K. Devine, E. Boman, R. Heaphy, R. Bisseling, and U. Catalyurek,
+     evaluation of efficient sparse matrix distributions,” in ICS ’96, 1996, pp.        “Parallel hypergraph partitioning for scientific computing,” in IPDPS
+     78–85.                                                                             ’06, 2006.
+[17] E. Saule, E. Ö. Baş, and Ü. V. Çatalyürek, “Load-balancing spatially     [41] A. Buluç, H. Meyerhenke, I. Safro, P. Sanders, and C. Schulz, Recent
+     located computations using rectangular partitions,” Journal of Parallel            Advances in Graph Partitioning, 2016, pp. 117–158.
+     and Distributed Computing, vol. 72, no. 10, pp. 1201–1214, 2012.
+
+
+
+                                                                               544
+
+          Authorized licensed use limited to: HUNAN UNIVERSITY. Downloaded on May 20,2025 at 13:13:01 UTC from IEEE Xplore. Restrictions apply.
+

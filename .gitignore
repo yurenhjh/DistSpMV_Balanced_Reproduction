@@ -1,0 +1,19 @@
+# Ignore matrix files and logs
+*.mtx
+*.mtx.gz
+logs/
+*.log
+*.tar.gz
+*.o
+*.out
+*.so
+*.pyc
+__pycache__/
+.DS_Store
+
+# Build artifacts
+build/
+
+# Editor temp files
+*~
+*.swp
