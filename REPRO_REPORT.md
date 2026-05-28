@@ -176,6 +176,12 @@ mpirun -np 4 ./dist_spmv_balanced matrices/cant.mtx 50 0.8 naive
 - 在受限的单机 VM 环境下，消融结果出现噪声/非单调行为：仅在 `frac=1.0` 时 `balanced` 相较 `naive` 在 np=4 上显著降低了通信时间（约 25%）；在较小 `frac`（0.5/0.8）上观测到 `balanced` 的通信时间反而略高，可能由测量抖动、METIS 随机性或边界划分带来的负载变化导致。
 - 结论：阈值确实会改变通信/计算权衡，但要在多节点/多核真实集群上重复此消融以获得稳健结论。
 
+**图：cant 阈值消融趋势**
+
+![cant: Threshold Ablation (Comm Time median, np=4)](data/ablation_trend.png)
+
+图注：此图显示在 np=4 时，对 `frac` 取 0.5/0.8/1.0 的中位数通信时间（来自 data/cant_ablation_medians.csv）。
+
 **核心发现（本次运行）**
 
 - 在 `matrices/ecology1.mtx`（np=4）上，Balanced 模式的通信时间由 Naive 的 0.670629 s 降至 0.249984 s，通信时间减少约 62.72%（(0.670629-0.249984)/0.670629 ≈ 0.6272）。本次结果进一步验证了 Algorithm 1 在减少跨进程通信量方面的有效性。
