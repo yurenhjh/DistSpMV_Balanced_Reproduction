@@ -161,6 +161,21 @@ mpirun -np 4 ./dist_spmv_balanced matrices/cant.mtx 50 0.8 naive
 | matrices/ecology1.mtx | balanced | 4 | 0.715606 | 0.201131 | 0.249984 | 2.4840 | 1.310066932520e-13 |
 | matrices/ecology1.mtx | naive    | 4 | 0.772329 | 0.145044 | 0.670629 | 3.4445 | 1.309530530074e-13 |
 
+## 阈值消融（cant）
+
+对 `cant.mtx` 进行了 `lower_bound_frac` = 0.5、0.8、1.0 的消融实验（`niter=50`，每组重复 3 次，取中位数；详见 `data/cant_ablation_medians.csv`）。下面为 np=4 的中位数 Comm time 与相对减少（`(comm_naive-comm_balanced)/comm_naive`）：
+
+| frac | Comm_balanced_median (s) | Comm_naive_median (s) | Reduction (%) |
+|---:|---:|---:|---:|
+| 0.5 | 0.233955 | 0.215466 | -8.58 |
+| 0.8 | 0.096800 | 0.083880 | -15.40 |
+| 1.0 | 0.216097 | 0.288334 | 25.05 |
+
+分析要点：
+
+- 在受限的单机 VM 环境下，消融结果出现噪声/非单调行为：仅在 `frac=1.0` 时 `balanced` 相较 `naive` 在 np=4 上显著降低了通信时间（约 25%）；在较小 `frac`（0.5/0.8）上观测到 `balanced` 的通信时间反而略高，可能由测量抖动、METIS 随机性或边界划分带来的负载变化导致。
+- 结论：阈值确实会改变通信/计算权衡，但要在多节点/多核真实集群上重复此消融以获得稳健结论。
+
 **核心发现（本次运行）**
 
 - 在 `matrices/ecology1.mtx`（np=4）上，Balanced 模式的通信时间由 Naive 的 0.670629 s 降至 0.249984 s，通信时间减少约 62.72%（(0.670629-0.249984)/0.670629 ≈ 0.6272）。本次结果进一步验证了 Algorithm 1 在减少跨进程通信量方面的有效性。
@@ -186,5 +201,5 @@ mpirun --oversubscribe -np 4 ./dist_spmv_balanced matrices/ecology1.mtx 10 1.0 b
 mpirun --oversubscribe -np 4 ./dist_spmv_balanced matrices/ecology1.mtx 10 1.0 naive
 ```
 
-我已把性能表保存为 [results_perf.csv](results_perf.csv)（bcsstk16/17/30），并把长期正确性表保存在 [results_correctness.csv](results_correctness.csv)。如果需要，我可以把所有运行日志导出到 `logs/` 并添加到报告中。
+已把性能表保存为 [results_perf.csv](results_perf.csv)（bcsstk16/17/30），并把长期正确性表保存在 [results_correctness.csv](results_correctness.csv)。所有运行日志已导出到 `logs/` 并添加到报告中。
 
