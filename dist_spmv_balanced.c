@@ -735,8 +735,10 @@ int main(int argc, char **argv) {
 
         free(col_counts); free(col_disp);
     } else {
-        /* 原有 balanced 实现保留 */
-        /* 预分配 send_lists 与容量，循环内复用，避免每轮大量 malloc/free（修复问题5） */
+        /* Balanced implementation with one-time index exchange (preprocessing)
+         * Build send lists once (which columns this rank needs from each owner),
+         * exchange the index lists once, then in the main loop only exchange values.
+         */
         int *send_counts = (int*)malloc((size_t)nprocs * sizeof(int));
         int *send_caps   = (int*)malloc((size_t)nprocs * sizeof(int));
         int **send_lists = (int**)malloc((size_t)nprocs * sizeof(int*));
@@ -745,185 +747,142 @@ int main(int argc, char **argv) {
             send_lists[p] = (int*)malloc((size_t)send_caps[p] * sizeof(int));
         }
 
+        /* One-time: construct send_lists (which cols this rank will request) */
+        memset(send_counts, 0, (size_t)nprocs * sizeof(int));
+        for (int lr = 0; lr < local_nrows; ++lr) {
+            for (int k = local_rowptr[lr]; k < local_rowptr[lr+1]; ++k) {
+                int col   = local_colidx[k];
+                int owner = owner_of_col[col];
+                if (col < leftBound || col > rightBound) {
+                    if (owner == rank) continue;
+                    int cnt = send_counts[owner];
+                    if (cnt >= send_caps[owner]) {
+                        send_caps[owner] *= 2;
+                        send_lists[owner] = (int*)realloc(send_lists[owner], (size_t)send_caps[owner] * sizeof(int));
+                    }
+                    send_lists[owner][cnt] = col;
+                    send_counts[owner]     = cnt + 1;
+                }
+            }
+        }
+        for (int p = 0; p < nprocs; ++p) {
+            if (send_counts[p] == 0) continue;
+            qsort(send_lists[p], (size_t)send_counts[p], sizeof(int), int_cmp);
+            int u = 1;
+            for (int i = 1; i < send_counts[p]; ++i)
+                if (send_lists[p][i] != send_lists[p][i-1])
+                    send_lists[p][u++] = send_lists[p][i];
+            send_counts[p] = u;
+        }
+
+        /* Exchange counts and index lists once (preprocessing) */
+        int *recv_counts = (int*)malloc((size_t)nprocs * sizeof(int));
+        MPI_Alltoall(send_counts, 1, MPI_INT, recv_counts, 1, MPI_INT, MPI_COMM_WORLD);
+
+        MPI_Request *req_idx_recv = (MPI_Request*)malloc((size_t)nprocs * sizeof(MPI_Request));
+        int **recv_req_lists      = (int**)malloc((size_t)nprocs * sizeof(int*));
+        for (int p = 0; p < nprocs; ++p) {
+            if (recv_counts[p] > 0) {
+                recv_req_lists[p] = (int*)malloc((size_t)recv_counts[p] * sizeof(int));
+                MPI_Irecv(recv_req_lists[p], recv_counts[p], MPI_INT, p, 100, MPI_COMM_WORLD, &req_idx_recv[p]);
+            } else {
+                recv_req_lists[p] = NULL;
+                req_idx_recv[p]   = MPI_REQUEST_NULL;
+            }
+        }
+        MPI_Request *req_idx_send = (MPI_Request*)malloc((size_t)nprocs * sizeof(MPI_Request));
+        for (int p = 0; p < nprocs; ++p) {
+            if (send_counts[p] > 0)
+                MPI_Isend(send_lists[p], send_counts[p], MPI_INT, p, 100, MPI_COMM_WORLD, &req_idx_send[p]);
+            else
+                req_idx_send[p] = MPI_REQUEST_NULL;
+        }
+        MPI_Waitall(nprocs, req_idx_recv, MPI_STATUSES_IGNORE);
+        MPI_Waitall(nprocs, req_idx_send, MPI_STATUSES_IGNORE);
+        free(req_idx_recv); free(req_idx_send);
+
+        /* Main iterations: only exchange values (no index exchange) */
         for (int iter = 0; iter < niter; ++iter) {
 
-            /* ── Phase A: 构建远端列请求（去重后按目标进程分组）── */
-            /* 每轮只重置计数器，复用 send_lists/send_caps */
-            memset(send_counts, 0, (size_t)nprocs * sizeof(int));
-
-            for (int lr = 0; lr < local_nrows; ++lr) {
-                for (int k = local_rowptr[lr]; k < local_rowptr[lr+1]; ++k) {
-                    int col   = local_colidx[k];
-                    int owner = owner_of_col[col];
-                    /* 【修复问题3/6】只有 col 不在 [leftBound,rightBound] 才需要远端请求 */
-                    if (col < leftBound || col > rightBound) {
-                        if (owner == rank) continue;   /* 自己负责且在 boundary 外（理论上不发生）*/
-                        int cnt = send_counts[owner];
-                        if (cnt >= send_caps[owner]) {
-                            send_caps[owner] *= 2;
-                            send_lists[owner] = (int*)realloc(send_lists[owner],
-                                                (size_t)send_caps[owner] * sizeof(int));
+                /* Exchange values according to precomputed index lists (Isend/Irecv posted)
+                 * Then perform a single-pass local SpMV using the now-complete x_buf so each nnz
+                 * is visited exactly once (no branch on boundary). This removes the double-traversal
+                 * and matches naive's compute work.
+                 */
+                double comm0 = MPI_Wtime();
+                MPI_Request *req_val_send = (MPI_Request*)malloc((size_t)nprocs * sizeof(MPI_Request));
+                double      **reply_bufs  = (double**)malloc((size_t)nprocs * sizeof(double*));
+                for (int p = 0; p < nprocs; ++p) {
+                    if (recv_counts[p] > 0) {
+                        reply_bufs[p] = (double*)malloc((size_t)recv_counts[p] * sizeof(double));
+                        for (int i = 0; i < recv_counts[p]; ++i) {
+                            int c = recv_req_lists[p][i];
+                            reply_bufs[p][i] = (c >= cstart && c < cend) ? x_owned[c - cstart] : 0.0;
                         }
-                        send_lists[owner][cnt] = col;
-                        send_counts[owner]     = cnt + 1;
+                        MPI_Isend(reply_bufs[p], recv_counts[p], MPI_DOUBLE, p, 200, MPI_COMM_WORLD, &req_val_send[p]);
+                    } else {
+                        reply_bufs[p]   = NULL;
+                        req_val_send[p] = MPI_REQUEST_NULL;
                     }
                 }
-            }
-            /* 去重 */
-            for (int p = 0; p < nprocs; ++p) {
-                if (send_counts[p] == 0) continue;
-                qsort(send_lists[p], (size_t)send_counts[p], sizeof(int), int_cmp);
-                int u = 1;
-                for (int i = 1; i < send_counts[p]; ++i)
-                    if (send_lists[p][i] != send_lists[p][i-1])
-                        send_lists[p][u++] = send_lists[p][i];
-                send_counts[p] = u;
-            }
-
-            /* ── Phase B: 交换请求数量，投递非阻塞通信 ── */
-            int *recv_counts = (int*)malloc((size_t)nprocs * sizeof(int));
-            MPI_Alltoall(send_counts, 1, MPI_INT, recv_counts, 1, MPI_INT, MPI_COMM_WORLD);
-
-            /* 接收"别人向我请求哪些列" */
-            MPI_Request *req_idx_recv = (MPI_Request*)malloc((size_t)nprocs * sizeof(MPI_Request));
-            int **recv_req_lists      = (int**)malloc((size_t)nprocs * sizeof(int*));
-            for (int p = 0; p < nprocs; ++p) {
-                if (recv_counts[p] > 0) {
-                    recv_req_lists[p] = (int*)malloc((size_t)recv_counts[p] * sizeof(int));
-                    /* 【修复问题7】count>0 才 Irecv */
-                    MPI_Irecv(recv_req_lists[p], recv_counts[p], MPI_INT,
-                              p, 100, MPI_COMM_WORLD, &req_idx_recv[p]);
-                } else {
-                    recv_req_lists[p] = NULL;
-                    req_idx_recv[p]   = MPI_REQUEST_NULL;   /* 【修复问题7】 */
+                MPI_Request *req_val_recv = (MPI_Request*)malloc((size_t)nprocs * sizeof(MPI_Request));
+                double      **recv_val_bufs = (double**)malloc((size_t)nprocs * sizeof(double*));
+                for (int p = 0; p < nprocs; ++p) {
+                    if (send_counts[p] > 0) {
+                        recv_val_bufs[p] = (double*)malloc((size_t)send_counts[p] * sizeof(double));
+                        MPI_Irecv(recv_val_bufs[p], send_counts[p], MPI_DOUBLE, p, 200, MPI_COMM_WORLD, &req_val_recv[p]);
+                    } else {
+                        recv_val_bufs[p] = NULL;
+                        req_val_recv[p]  = MPI_REQUEST_NULL;
+                    }
                 }
-            }
-            /* 发送"我需要哪些列" */
-            MPI_Request *req_idx_send = (MPI_Request*)malloc((size_t)nprocs * sizeof(MPI_Request));
-            for (int p = 0; p < nprocs; ++p) {
-                if (send_counts[p] > 0)
-                    MPI_Isend(send_lists[p], send_counts[p], MPI_INT,
-                              p, 100, MPI_COMM_WORLD, &req_idx_send[p]);
-                else
-                    req_idx_send[p] = MPI_REQUEST_NULL;
-            }
 
-            /* ── Phase C: 【修复问题5】本地计算先行，不计入 comm_time ──
-             *
-             * 【修复问题3】对角区间内的所有列（不论 owner 是谁）都已在 x_buf 中（初始或上轮更新），
-             * 直接计算，无需等待通信。
-             */
-            double comp0 = MPI_Wtime();
-            {
-                int nthreads = omp_get_max_threads();
-                int *thr_bound = (int*)malloc((nthreads + 1) * sizeof(int));
-                compute_thread_boundaries(local_rowptr, local_nrows, nthreads, thr_bound);
-                #pragma omp parallel num_threads(nthreads)
+                MPI_Waitall(nprocs, req_val_recv, MPI_STATUSES_IGNORE);
+                MPI_Waitall(nprocs, req_val_send, MPI_STATUSES_IGNORE);
+                double comm1 = MPI_Wtime();
+                comm_time += (comm1 - comm0);
+
+                /* Unpack remote values into x_buf */
+                for (int p = 0; p < nprocs; ++p) {
+                    for (int i = 0; i < send_counts[p]; ++i)
+                        x_buf[send_lists[p][i]] = recv_val_bufs[p][i];
+                }
+
+                /* Single-pass compute: visit each nnz exactly once, no boundary branch */
+                double comp0 = MPI_Wtime();
                 {
-                    int tid = omp_get_thread_num();
-                    for (int lr = thr_bound[tid]; lr < thr_bound[tid+1]; ++lr) {
-                        double s = 0.0;
-                        for (int k = local_rowptr[lr]; k < local_rowptr[lr+1]; ++k) {
-                            int col = local_colidx[k];
-                            /* 【修复问题3】条件：col 在 balanced boundary 内 */
-                            if (col >= leftBound && col <= rightBound)
+                    int nthreads = omp_get_max_threads();
+                    int *thr_bound = (int*)malloc((nthreads + 1) * sizeof(int));
+                    compute_thread_boundaries(local_rowptr, local_nrows, nthreads, thr_bound);
+                    #pragma omp parallel num_threads(nthreads)
+                    {
+                        int tid = omp_get_thread_num();
+                        for (int lr = thr_bound[tid]; lr < thr_bound[tid+1]; ++lr) {
+                            double s = 0.0;
+                            for (int k = local_rowptr[lr]; k < local_rowptr[lr+1]; ++k) {
+                                int col = local_colidx[k];
                                 s += local_vals[k] * x_buf[col];
+                            }
+                            y_local[lr] = s;
                         }
-                        y_local[lr] = s;
                     }
+                    free(thr_bound);
                 }
-                free(thr_bound);
-            }
-            double comp1 = MPI_Wtime();
-            compute_time += (comp1 - comp0);
+                double comp1 = MPI_Wtime();
+                compute_time += (comp1 - comp0);
 
-            /* ── Phase D: 等待索引交換完成，準備 x 值回复 ── */
-            double comm0 = MPI_Wtime();   /* 【修复问题5】comm 计时从这里开始 */
-            MPI_Waitall(nprocs, req_idx_recv, MPI_STATUSES_IGNORE);
-            MPI_Waitall(nprocs, req_idx_send, MPI_STATUSES_IGNORE);
-
-            /* 发送别人请求的 x 值 */
-            MPI_Request *req_val_send = (MPI_Request*)malloc((size_t)nprocs * sizeof(MPI_Request));
-            double      **reply_bufs  = (double**)malloc((size_t)nprocs * sizeof(double*));
-            for (int p = 0; p < nprocs; ++p) {
-                if (recv_counts[p] > 0) {
-                    reply_bufs[p] = (double*)malloc((size_t)recv_counts[p] * sizeof(double));
-                    for (int i = 0; i < recv_counts[p]; ++i) {
-                        int c = recv_req_lists[p][i];
-                        reply_bufs[p][i] = (c >= cstart && c < cend) ? x_owned[c - cstart] : 0.0;
-                    }
-                    MPI_Isend(reply_bufs[p], recv_counts[p], MPI_DOUBLE,
-                              p, 200, MPI_COMM_WORLD, &req_val_send[p]);
-                } else {
-                    reply_bufs[p]   = NULL;
-                    req_val_send[p] = MPI_REQUEST_NULL;
+                /* free per-iteration buffers */
+                for (int p = 0; p < nprocs; ++p) {
+                    if (reply_bufs[p]) free(reply_bufs[p]);
+                    if (recv_val_bufs[p]) free(recv_val_bufs[p]);
                 }
-            }
-            /* 接收我请求的 x 值 */
-            MPI_Request *req_val_recv = (MPI_Request*)malloc((size_t)nprocs * sizeof(MPI_Request));
-            double      **recv_val_bufs = (double**)malloc((size_t)nprocs * sizeof(double*));
-            for (int p = 0; p < nprocs; ++p) {
-                if (send_counts[p] > 0) {
-                    recv_val_bufs[p] = (double*)malloc((size_t)send_counts[p] * sizeof(double));
-                    MPI_Irecv(recv_val_bufs[p], send_counts[p], MPI_DOUBLE,
-                              p, 200, MPI_COMM_WORLD, &req_val_recv[p]);
-                } else {
-                    recv_val_bufs[p] = NULL;
-                    req_val_recv[p]  = MPI_REQUEST_NULL;
-                }
-            }
-
-            MPI_Waitall(nprocs, req_val_recv, MPI_STATUSES_IGNORE);
-            MPI_Waitall(nprocs, req_val_send, MPI_STATUSES_IGNORE);
-            double comm1 = MPI_Wtime();
-            comm_time += (comm1 - comm0);   /* 【修复问题5】comm 计时到这里结束 */
-
-            /* 解包远端 x 值到 x_buf */
-            for (int p = 0; p < nprocs; ++p) {
-                for (int i = 0; i < send_counts[p]; ++i)
-                    x_buf[send_lists[p][i]] = recv_val_bufs[p][i];
-            }
-
-            /* ── Phase E: 计算远端部分（boundary 外的列）──
-             * 【修复问题6】条件与 Phase C 互斥：col NOT in [leftBound, rightBound]
-             */
-            double comp2 = MPI_Wtime();
-            {
-                int nthreads = omp_get_max_threads();
-                int *thr_bound = (int*)malloc((nthreads + 1) * sizeof(int));
-                compute_thread_boundaries(local_rowptr, local_nrows, nthreads, thr_bound);
-                #pragma omp parallel num_threads(nthreads)
-                {
-                    int tid = omp_get_thread_num();
-                    for (int lr = thr_bound[tid]; lr < thr_bound[tid+1]; ++lr) {
-                        double s = y_local[lr];
-                        for (int k = local_rowptr[lr]; k < local_rowptr[lr+1]; ++k) {
-                            int col = local_colidx[k];
-                            /* 【修复问题6】严格与 Phase C 互斥 */
-                            if (col < leftBound || col > rightBound)
-                                s += local_vals[k] * x_buf[col];
-                        }
-                        y_local[lr] = s;
-                    }
-                }
-                free(thr_bound);
-            }
-            double comp3 = MPI_Wtime();
-            compute_time += (comp3 - comp2);
-
-            /* ── 释放本轮临时缓冲（保留 send_lists/send_caps/send_counts 以供复用） ── */
-            for (int p = 0; p < nprocs; ++p) {
-                if (recv_req_lists[p]) free(recv_req_lists[p]);
-                if (reply_bufs[p])     free(reply_bufs[p]);
-                if (recv_val_bufs[p])  free(recv_val_bufs[p]);
-            }
-            free(recv_counts);
-            free(req_idx_recv); free(req_idx_send);
-            free(req_val_send); free(req_val_recv);
-            free(reply_bufs);   free(recv_val_bufs);
-            free(recv_req_lists);
+                free(req_val_send); free(req_val_recv);
+                free(reply_bufs); free(recv_val_bufs);
         }
-        /* 迭代结束后释放复用的 send_lists/send_caps/send_counts */
+
+        /* cleanup preprocessing arrays and persistent send lists */
+        for (int p = 0; p < nprocs; ++p) if (recv_req_lists[p]) free(recv_req_lists[p]);
+        free(recv_req_lists); free(recv_counts);
         for (int p = 0; p < nprocs; ++p) free(send_lists[p]);
         free(send_lists); free(send_caps); free(send_counts);
     }
@@ -966,6 +925,32 @@ int main(int argc, char **argv) {
     if (rank == 0) {
         double y_norm = sqrt(global_norm_sq);
         printf("Y-norm: %.12e\n", y_norm);
+    }
+
+    /* 输出每个进程的 local/remote nnz（用于负载均衡度分析） */
+    long long local_nnz_val = 0, remote_nnz_val = 0;
+    for (int lr = 0; lr < local_nrows; ++lr) {
+        for (int k = local_rowptr[lr]; k < local_rowptr[lr+1]; ++k) {
+            int col = local_colidx[k];
+            if (col >= leftBound && col <= rightBound) local_nnz_val++;
+            else remote_nnz_val++;
+        }
+    }
+    long long *all_local_nnz = NULL, *all_remote_nnz = NULL;
+    if (rank == 0) {
+        all_local_nnz  = (long long*)malloc(nprocs * sizeof(long long));
+        all_remote_nnz = (long long*)malloc(nprocs * sizeof(long long));
+    }
+    MPI_Gather(&local_nnz_val,  1, MPI_LONG_LONG, all_local_nnz,  1, MPI_LONG_LONG, 0, MPI_COMM_WORLD);
+    MPI_Gather(&remote_nnz_val, 1, MPI_LONG_LONG, all_remote_nnz, 1, MPI_LONG_LONG, 0, MPI_COMM_WORLD);
+    if (rank == 0) {
+        printf("Per-process local_nnz:  ");
+        for (int p = 0; p < nprocs; ++p) printf("%lld ", all_local_nnz[p]);
+        printf("\n");
+        printf("Per-process remote_nnz: ");
+        for (int p = 0; p < nprocs; ++p) printf("%lld ", all_remote_nnz[p]);
+        printf("\n");
+        free(all_local_nnz); free(all_remote_nnz);
     }
 
     /* ── 清理 ── */

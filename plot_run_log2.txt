@@ -1,0 +1,9 @@
+Saved /home/hjh/桌面/并行算法课程代码/论文复现1/figures/fig1_gflops_comparison_np1.png
+Saved /home/hjh/桌面/并行算法课程代码/论文复现1/figures/fig1_gflops_comparison_np2.png
+Saved /home/hjh/桌面/并行算法课程代码/论文复现1/figures/fig1_gflops_comparison.png
+Saved /home/hjh/桌面/并行算法课程代码/论文复现1/figures/fig2_comm_time.png
+Saved /home/hjh/桌面/并行算法课程代码/论文复现1/figures/fig3_speedup.png
+Saved /home/hjh/桌面/并行算法课程代码/论文复现1/figures/fig4_ablation.png
+Saved /home/hjh/桌面/并行算法课程代码/论文复现1/figures/fig5_load_balance.png
+Saved /home/hjh/桌面/并行算法课程代码/论文复现1/figures/fig6_remote_nnz.png
+Plotting finished.

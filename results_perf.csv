@@ -1,7 +1,0 @@
-Matrix,np,mode,GFlops
-matrices/bcsstk16.mtx,4,balanced,3.8269
-matrices/bcsstk16.mtx,4,naive,0.8026
-matrices/bcsstk17.mtx,4,balanced,3.1174
-matrices/bcsstk17.mtx,4,naive,4.0622
-matrices/bcsstk30.mtx,4,balanced,2.4670
-matrices/bcsstk30.mtx,4,naive,1.3777

@@ -32,10 +32,10 @@ while IFS=, read -r collection name; do
       gflops=$(get_val "GFlops" "$log")
       echo "${name},${np},${threads},naive,${total},${comp},${comm},${gflops},${log}" >> "$CSV"
 
-      # METIS reorder + naive
+      # METIS reorder + naive (separate binary)
       log="results/${name}_metis_np${np}_t${threads}.log"
       echo "Running METIS+naive: $name np=$np threads=$threads"
-      mpirun -np "$np" ./dist_spmv_naive "$mtx" "$NITER" METIS < /dev/null 2>&1 | tee "$log"
+      mpirun -np "$np" ./dist_spmv_metis_naive "$mtx" "$NITER" < /dev/null 2>&1 | tee "$log"
       total=$(get_val "Total time" "$log")
       comp=$(get_val "Compute time" "$log")
       comm=$(get_val "Comm time" "$log")

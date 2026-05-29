@@ -1,13 +1,12 @@
 /*
- * dist_spmv_naive.c — 基线分布式 SpMV（简单实现）
+ * dist_spmv_metis_naive.c — METIS 重排 + 基线分布式 SpMV
  *
- * 每个进程独立读取完整矩阵（简化实现），按行均等划分负责的行段，
- * 每轮通过 MPI_Allgatherv 聚合所有进程拥有的 x 段到全局 x_buf，
- * 然后本地计算 SpMV。用于与 DistSpMV_Balanced 比较 baseline 性能。
+ * 程序会在运行前在 rank 0 上使用 METIS 对行进行划分并生成重排（old->new），
+ * 将重排广播给所有进程，并在所有进程上应用重排后按块列划分进行 naive SpMV。
  *
- * 编译： mpicc -O3 -fopenmp -o dist_spmv_naive dist_spmv_naive.c -lm
+ * 编译： mpicc -O3 -fopenmp -o dist_spmv_metis_naive dist_spmv_metis_naive.c -lmetis -lm
  * 运行： export OMP_NUM_THREADS=4
- *       mpirun -np 2 ./dist_spmv_naive matrix.mtx 10
+ *       mpirun -np 2 ./dist_spmv_metis_naive matrix.mtx 10
  */
 
 #include <stdio.h>
@@ -16,6 +15,7 @@
 #include <math.h>
 #include <mpi.h>
 #include <omp.h>
+#include <metis.h>
 
 typedef struct { int row, col; double val; } Triplet;
 
@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
 
     if (argc < 2) {
-        if (rank == 0) fprintf(stderr, "Usage: %s matrix.mtx [niter=10]\n用法: %s matrix.mtx [niter=10]\n", argv[0], argv[0]);
+        if (rank == 0) fprintf(stderr, "Usage: %s matrix.mtx [niter=10]\n", argv[0]);
         MPI_Finalize(); return 1;
     }
     const char *filename = argv[1];
@@ -119,12 +119,156 @@ int main(int argc, char **argv) {
 
     CSR A; memset(&A,0,sizeof(A));
     if (read_matrix_market(filename, &A) != 0) {
-        if (rank==0) fprintf(stderr, "Failed to read %s\n无法读取矩阵文件：%s\n", filename, filename);
+        if (rank==0) fprintf(stderr, "Failed to read %s\n", filename);
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
     int nrows = A.nrows, ncols = A.ncols; long long global_nnz = A.nnz;
-    /* No preprocessing: naive baseline uses original matrix ordering */
+    int symmetric_perm = (nrows == ncols);
+
+    /* 使用 METIS 在 rank 0 生成 permutation，并广播给所有进程 */
+    int *perm = NULL; int metis_ok = 0;
+    if (rank == 0) {
+        int *col_counts_tmp = (int*)calloc((size_t)ncols, sizeof(int));
+        for (int i = 0; i < nrows; ++i)
+            for (int k = A.rowptr[i]; k < A.rowptr[i+1]; ++k)
+                col_counts_tmp[A.colidx[k]]++;
+
+        int *col_disp_tmp = (int*)malloc((size_t)(ncols+1) * sizeof(int));
+        col_disp_tmp[0] = 0;
+        for (int c = 0; c < ncols; ++c) col_disp_tmp[c+1] = col_disp_tmp[c] + col_counts_tmp[c];
+
+        int *rows_in_col = (int*)malloc((size_t)A.nnz * sizeof(int));
+        int *tmp_idx = (int*)malloc((size_t)ncols * sizeof(int));
+        for (int c = 0; c < ncols; ++c) tmp_idx[c] = col_disp_tmp[c];
+        for (int i = 0; i < nrows; ++i)
+            for (int k = A.rowptr[i]; k < A.rowptr[i+1]; ++k) {
+                int c = A.colidx[k]; rows_in_col[tmp_idx[c]++] = i;
+            }
+        free(tmp_idx);
+
+        int *mark = (int*)malloc((size_t)nrows * sizeof(int));
+        for (int i = 0; i < nrows; ++i) mark[i] = -1;
+        int *xadj = (int*)malloc((size_t)(nrows+1) * sizeof(int));
+        xadj[0] = 0;
+        for (int i = 0; i < nrows; ++i) {
+            int deg = 0;
+            for (int k = A.rowptr[i]; k < A.rowptr[i+1]; ++k) {
+                int c = A.colidx[k];
+                for (int t = col_disp_tmp[c]; t < col_disp_tmp[c+1]; ++t) {
+                    int v = rows_in_col[t];
+                    if (v == i) continue;
+                    if (mark[v] != i) { mark[v] = i; deg++; }
+                }
+            }
+            xadj[i+1] = deg;
+        }
+        for (int i = 0; i < nrows; ++i) xadj[i+1] += xadj[i];
+        int nedges = xadj[nrows];
+        int *adjncy = (int*)malloc((size_t)nedges * sizeof(int));
+        for (int i = 0; i < nrows; ++i) mark[i] = -1;
+        for (int i = 0; i < nrows; ++i) {
+            int pos = xadj[i];
+            for (int k = A.rowptr[i]; k < A.rowptr[i+1]; ++k) {
+                int c = A.colidx[k];
+                for (int t = col_disp_tmp[c]; t < col_disp_tmp[c+1]; ++t) {
+                    int v = rows_in_col[t];
+                    if (v == i) continue;
+                    if (mark[v] != i) { mark[v] = i; adjncy[pos++] = v; }
+                }
+            }
+        }
+
+        idx_t nvtxs = (idx_t)nrows;
+        idx_t ncon = 1;
+        idx_t *xadj_idx = (idx_t*)malloc((size_t)(nrows+1) * sizeof(idx_t));
+        idx_t *adjncy_idx = (idx_t*)malloc((size_t)nedges * sizeof(idx_t));
+        for (int i = 0; i <= nrows; ++i) xadj_idx[i] = (idx_t)xadj[i];
+        for (int i = 0; i < nedges; ++i) adjncy_idx[i] = (idx_t)adjncy[i];
+
+        idx_t nparts = (idx_t)nprocs;
+        idx_t objval = 0;
+        idx_t *part_idx = (idx_t*)malloc((size_t)nrows * sizeof(idx_t));
+
+        int need_fallback = 0;
+        if (nvtxs <= 0) need_fallback = 1;
+        if (nparts < 1) nparts = 1;
+        if (nparts > nvtxs) nparts = nvtxs;
+        if (nparts <= 1) { for (int i = 0; i < nrows; ++i) part_idx[i] = 0; need_fallback = 1; }
+        if (!need_fallback) {
+            for (int i = 1; i <= nrows; ++i) if (xadj_idx[i] < xadj_idx[i-1]) { need_fallback = 1; break; }
+        }
+        if (!need_fallback && nedges > 0) {
+            for (int i = 0; i < nedges; ++i) if (adjncy_idx[i] < 0 || adjncy_idx[i] >= nvtxs) { need_fallback = 1; break; }
+        }
+        if (!need_fallback && xadj_idx[nrows] == 0) need_fallback = 1;
+
+        if (!need_fallback) {
+            int metis_ret = METIS_PartGraphKway(&nvtxs, &ncon, xadj_idx, adjncy_idx,
+                                               NULL, NULL, NULL, &nparts, NULL, NULL,
+                                               NULL, &objval, part_idx);
+            if (metis_ret != METIS_OK) need_fallback = 1;
+        }
+        if (need_fallback) {
+            for (int i = 0; i < nrows; ++i) part_idx[i] = (idx_t)((long long)i * (long long)nprocs / (long long)nrows);
+        }
+
+        int *count_per_part = (int*)calloc((size_t)nprocs, sizeof(int));
+        for (int i = 0; i < nrows; ++i) count_per_part[(int)part_idx[i]]++;
+        int *offp = (int*)malloc((size_t)(nprocs+1) * sizeof(int)); offp[0] = 0;
+        for (int p = 0; p < nprocs; ++p) offp[p+1] = offp[p] + count_per_part[p];
+        int *pos_arr = (int*)malloc((size_t)nprocs * sizeof(int));
+        for (int p = 0; p < nprocs; ++p) pos_arr[p] = offp[p];
+        int *perm_new = (int*)malloc((size_t)nrows * sizeof(int));
+        for (int i = 0; i < nrows; ++i) {
+            int p = (int)part_idx[i]; perm_new[ pos_arr[p]++ ] = i;
+        }
+        perm = (int*)malloc((size_t)nrows * sizeof(int));
+        for (int ni = 0; ni < nrows; ++ni) perm[ perm_new[ni] ] = ni;
+
+        free(xadj); free(adjncy); free(xadj_idx); free(adjncy_idx); free(part_idx);
+        free(count_per_part); free(offp); free(pos_arr); free(perm_new);
+        free(col_counts_tmp); free(col_disp_tmp); free(rows_in_col); free(mark);
+
+        metis_ok = 1;
+        if (rank == 0) printf("METIS partition computed on rank 0\n");
+    }
+
+    MPI_Bcast(&metis_ok, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (metis_ok) {
+        if (rank != 0) perm = (int*)malloc((size_t)nrows * sizeof(int));
+        MPI_Bcast(perm, nrows, MPI_INT, 0, MPI_COMM_WORLD);
+        if (rank == 0) printf("METIS permutation applied\n");
+    } else {
+        if (rank != 0) perm = (int*)malloc((size_t)nrows * sizeof(int));
+        for (int i = 0; i < nrows; ++i) perm[i] = i;
+    }
+
+    /* apply perm to matrix */
+    {
+        Triplet *trips = (Triplet*)malloc((size_t)A.nnz * sizeof(Triplet));
+        long long t = 0;
+        for (int i = 0; i < nrows; ++i) {
+            for (int k = A.rowptr[i]; k < A.rowptr[i+1]; ++k) {
+                trips[t].row = perm[i];
+                if (symmetric_perm) trips[t].col = perm[A.colidx[k]];
+                else                trips[t].col = A.colidx[k];
+                trips[t].val = A.vals[k];
+                t++;
+            }
+        }
+        qsort(trips, (size_t)t, sizeof(Triplet), triplet_cmp);
+        int *new_rowptr = (int*)calloc((size_t)(nrows+1), sizeof(int));
+        int *new_colidx = (int*)malloc((size_t)t * sizeof(int));
+        double *new_vals = (double*)malloc((size_t)t * sizeof(double));
+        for (long long k = 0; k < t; ++k) new_rowptr[trips[k].row + 1]++;
+        for (int i = 0; i < nrows; ++i) new_rowptr[i+1] += new_rowptr[i];
+        for (long long k = 0; k < t; ++k) { new_colidx[k] = trips[k].col; new_vals[k] = trips[k].val; }
+        free(A.rowptr); free(A.colidx); free(A.vals);
+        A.rowptr = new_rowptr; A.colidx = new_colidx; A.vals = new_vals; A.nnz = t;
+        free(trips);
+        if (rank==0) printf("Applied permutation (METIS)\n");
+    }
 
     int *row_offsets = (int*)malloc((size_t)(nprocs+1)*sizeof(int));
     int *col_offsets = (int*)malloc((size_t)(nprocs+1)*sizeof(int));
@@ -192,21 +336,14 @@ int main(int argc, char **argv) {
 
     if (rank == 0) {
         double gflops = (2.0 * (double)global_nnz * (double)niter) / (max_compute * 1.0e9);
-        printf("== DistSpMV_Naive ==\n");
+        printf("== DistSpMV_METIS_Naive ==\n");
         printf("Processes : %d  |  Threads/proc: %d\n", nprocs, omp_get_max_threads());
-        printf("进程数：%d  |  每进程线程数：%d\n", nprocs, omp_get_max_threads());
         printf("Matrix : %d x %d, nnz=%lld\n", nrows, ncols, global_nnz);
-        printf("矩阵：%d x %d，非零元数：%lld\n", nrows, ncols, global_nnz);
         printf("Iterations : %d\n", niter);
-        printf("迭代次数：%d\n", niter);
         printf("Total time : %.6f s\n", max_total);
-        printf("总时间：%.6f 秒\n", max_total);
         printf("Compute time: %.6f s\n", max_compute);
-        printf("计算时间：%.6f 秒\n", max_compute);
         printf("Comm time   : %.6f s\n", max_comm);
-        printf("通信时间：%.6f 秒\n", max_comm);
         printf("GFlops : %.4f\n", gflops);
-        printf("GFlops（理论）：%.4f\n", gflops);
     }
     /* 1) 输出 Y-norm（用于正确性验证） */
     double local_norm_sq = 0.0;

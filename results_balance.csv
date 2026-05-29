@@ -1,0 +1,10 @@
+Matrix,Algorithm,np,NNZ_p0,NNZ_p1,LIR
+cant.mtx,naive,2,2011693,1995690,0.003993
+cant.mtx,metis_naive,2,1992317,2015066,0.005677
+cant.mtx,balanced,2,1992317,2015066,0.005677
+ecology1.mtx,naive,2,2498000,2498000,0.000000
+ecology1.mtx,metis_naive,2,2497974,2498026,0.000010
+ecology1.mtx,balanced,2,2497974,2498026,0.000010
+bcsstk30.mtx,naive,2,955695,1087797,0.064645
+bcsstk30.mtx,metis_naive,2,967441,1076051,0.053149
+bcsstk30.mtx,balanced,2,967441,1076051,0.053149
