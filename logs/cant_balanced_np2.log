@@ -1,0 +1,29 @@
+METIS partition computed on rank 0
+rank 0: applying perm (nrows=62451 ncols=62451 nnz=4007383)
+rank 1: applying perm (nrows=62451 ncols=62451 nnz=4007383)
+METIS permutation applied
+rank 0: perm applied, new nnz=4007383
+rank 0: row_offsets[0,31226], col_offsets[0,31226]
+rank 1: perm applied, new nnz=4007383
+rank 1: row_offsets[31226,62451], col_offsets[31226,62451]
+== DistSpMV_Balanced (fixed) ==
+== DistSpMV_Balanced（修复版）==
+Processes   : 2  |  Threads/proc: 4
+进程数：2  |  每进程线程数：4
+Matrix      : 62451 x 62451, nnz=4007383
+矩阵：62451 x 62451，非零元数：4007383
+Iterations  : 100
+迭代次数：100
+lower_bound (frac) : 1.00
+lower_bound（阈值比例）：1.00
+Total time  : 0.466075 s
+总时间：0.466075 秒
+Compute time: 0.391285 s
+计算时间：0.391285 秒
+Comm time   : 0.110011 s
+通信时间：0.110011 秒
+GFlops      : 2.0483
+GFlops（理论）：2.0483
+Y-norm: 4.170292046439e+04
+Per-process local_nnz:  1992317 2004147 
+Per-process remote_nnz: 0 10919 

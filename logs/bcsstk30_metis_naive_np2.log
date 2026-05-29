@@ -1,0 +1,13 @@
+METIS partition computed on rank 0
+METIS permutation applied
+Applied permutation (METIS)
+== DistSpMV_METIS_Naive ==
+Processes : 2  |  Threads/proc: 4
+Matrix : 28924 x 28924, nnz=2043492
+Iterations : 100
+Total time : 0.183390 s
+Compute time: 0.146380 s
+Comm time   : 0.040710 s
+GFlops : 2.7920
+Y-norm: 1.317123426259e+04
+Per-process nnz: 967441 1076051 

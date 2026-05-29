@@ -1,0 +1,17 @@
+== DistSpMV_Naive ==
+Processes : 2  |  Threads/proc: 4
+进程数：2  |  每进程线程数：4
+Matrix : 28924 x 28924, nnz=2043492
+矩阵：28924 x 28924，非零元数：2043492
+Iterations : 100
+迭代次数：100
+Total time : 0.251836 s
+总时间：0.251836 秒
+Compute time: 0.214465 s
+计算时间：0.214465 秒
+Comm time   : 0.072183 s
+通信时间：0.072183 秒
+GFlops : 1.9057
+GFlops（理论）：1.9057
+Y-norm: 1.317123426259e+04
+Per-process nnz: 955695 1087797 
