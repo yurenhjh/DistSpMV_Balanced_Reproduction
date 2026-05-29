@@ -56,17 +56,31 @@ cant.mtx | 2 | 4.170292046439e+04 | 4.170292046439e+04 | 4.170292046439e+04 | �
 ecology1.mtx | 2 | 1.309715002014e-13 | 1.309715002014e-13 | 1.309715002014e-13 | 是
 bcsstk30.mtx | 2 | 1.317123426259e+04 | 1.317123426259e+04 | 1.317123426259e+04 | 是
 
-### 5.2 主实验性能对比（TBD，插入图）
-- 插图：`fig1_gflops_comparison.png`, `fig2_comm_time.png`, `fig3_speedup.png`
+### 5.2 主实验性能对比
 
-### 5.3 阈值消融（TBD，插图）
-- 插图：`fig4_ablation.png`
+![Fig1: GFlops comparison](figures/fig1_gflops_comparison.png)
 
-### 5.4 负载均衡度（TBD，插图）
-- 插图：`fig5_load_balance.png`, `fig6_remote_nnz.png`
+![Fig2: Communication time comparison](figures/fig2_comm_time.png)
+
+![Fig3: Speedup of Balanced over baselines](figures/fig3_speedup.png)
+
+注：在 `ecology1.mtx`（np=2）上的完整重跑结果显示，通信缩减比（CommTime_Metis / CommTime_Balanced）为 5.988703，表明在该稀疏矩阵上 Balanced 实现显著减少了通信时间（参见 `results_main.csv` 中对应条目）。
+
+### 5.3 阈值消融
+
+![Fig4: Ablation study on lower_bound_frac (cant, np=2)](figures/fig4_ablation.png)
+
+### 5.4 负载均衡度
+
+注：LIR（Load Imbalance Ratio）用于衡量进程间计算负载不均衡程度；LIR 越小，代表各进程计算量越接近，负载均衡效果越好。有关 LIR 的数值请参见 `results_balance.csv` 中的 LIR 字段。
+
+![Fig5: Load Imbalance Ratio Comparison (np=2)](figures/fig5_load_balance.png)
+
+![Fig6: Per-process Remote NNZ (cant, np=2)](figures/fig6_remote_nnz.png)
 
 ## 6. 与论文结果对比分析（占位）
 - 论文在高并发/高速网络下得到较高加速比，本复现受限环境下重点验证通信量下降趋势与负载均衡效果。
+- 观察：在低核心数（np=2）下（例如 `cant.mtx` 的结果），复杂的负载均衡逻辑可能带来额外的软开销，从而抵消通信缩减带来的性能收益；因此在小规模节点下 Balanced 并非总能获得加速。
 
 ## 7. 使用说明（快速）
 1. 编译并运行全部实验：
@@ -90,10 +104,4 @@ python3 plot_results.py
 
 ---
 
-*注：本报告内容为当前代码状态的说明与占位，数值表格将在用户要求重新运行全部实验后填充。*
 
-**自动分析（脚本生成）**
-
-- Ecology1 通信缩减比（CommTime_Metis / CommTime_Balanced，np=2）: 1.259573
-
-- Cant 性能下降说明（np=2）: 在低核心数（np=2）下，复杂负载均衡逻辑带来的软开销超过了微量通信缩减的收益。

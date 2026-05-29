@@ -2,6 +2,14 @@
 
 本仓库复现并实现论文 “Balancing Computation and Communication in Distributed Sparse Matrix-Vector Multiplication” (CCGrid 2023) 的核心思想。
 
+## 论文引用
+
+Hongli Mi, Xiangrui Yu, Xiaosong Yu, Shuangyuan Wu, Weifeng Liu, "Balancing Computation and Communication in Distributed Sparse Matrix-Vector Multiplication", 2023 IEEE/ACM 23rd International Symposium on Cluster, Cloud and Internet Computing (CCGrid), DOI: 10.1109/CCGrid57682.2023.00056.
+
+## 硬件说明
+
+注：本实验结果基于 2 逻辑 CPU、4GB 内存的本地虚拟机测试；与论文在 256 核集群上的结果可能存在量级差异。
+
 主要目标
 - 实现论文提出的对角区间扩展与远端重划策略以减少通信开销；
 - 提供基线（naive）、METIS+naive 与 Balanced 三种实现，便于比较；
@@ -63,9 +71,6 @@ python3 plot_results.py
 后续建议
 - 在真实集群（多节点、真实网络）上重跑实验以验证大规模的可伸缩性。
 - 将 rank-0 的分发替换为更细粒度的分发以节省内存并提高可扩展性。
-
-问题与贡献
-- 如需对实验集、参数或画图方式做调整，我可以帮助修改脚本或添加新的指标。
 
 ---
 作者/维护：复现实验自动化脚本与补丁
